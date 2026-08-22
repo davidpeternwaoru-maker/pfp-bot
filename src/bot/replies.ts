@@ -1,4 +1,5 @@
 import type { EntryOutcome } from './entry.js';
+import type { TraitRecord } from '../render/types.js';
 
 /**
  * Every reply is plain text and no handler ever sets parse_mode. A project
@@ -39,6 +40,30 @@ export function entryReply(outcome: EntryOutcome): string {
       return `You already hold edition #${String(outcome.editionNumber)} in ${outcome.projectName}. One per member — that one is yours permanently.`;
 
     case 'ready':
-      return `${outcome.projectName} is open and you have not claimed yet. Rolling is not wired up until the next phase.`;
+      // Unused in practice: a ready member is sent a rolled image instead of
+      // text. Kept so the union stays exhaustive if that ever changes.
+      return `${outcome.projectName} is open. Rolling now…`;
   }
+}
+
+export const ROLL_EXHAUSTED =
+  'Every combination in this collection has been claimed. Nothing is left to roll.';
+
+export const ROLL_UNDETERMINED =
+  'The pool is very nearly claimed out and I could not find a free combination just now. Try once more.';
+
+export const ROLL_STALE = 'This roll has expired. Open the link again to start a new one.';
+
+export const ROLL_SLOT_STUCK = 'No other option fits there with what you are holding.';
+
+export const CLAIM_NOT_ENABLED =
+  'Claiming is not switched on yet. Your roll is safe — reroll away.';
+
+export const ROLL_RENDER_FAILED =
+  'That combination would not render. Nothing is lost — try rerolling.';
+
+/** Caption under the rolled image: what the member is currently holding. */
+export function rollCaption(traits: readonly TraitRecord[]): string {
+  const lines = traits.map((trait) => `${trait.slot}: ${trait.name}`);
+  return [...lines, '', 'Reroll, adjust a slot, or claim it.'].join('\n');
 }

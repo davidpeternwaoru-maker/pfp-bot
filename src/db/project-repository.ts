@@ -36,3 +36,24 @@ export async function findClaimForMember(
     select: { editionNumber: true },
   });
 }
+
+/**
+ * Lookup by primary key, used when a button press re-checks that the drop is
+ * still open. The id comes from server-side session state, never from the
+ * callback payload.
+ */
+export async function findProjectById(
+  prisma: PrismaClient,
+  projectId: number,
+): Promise<EntryProject | null> {
+  return prisma.project.findUnique({
+    where: { id: projectId },
+    select: {
+      id: true,
+      name: true,
+      status: true,
+      claimOpensAt: true,
+      claimClosesAt: true,
+    },
+  });
+}

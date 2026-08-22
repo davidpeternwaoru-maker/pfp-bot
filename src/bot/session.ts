@@ -27,6 +27,15 @@ export type SessionInput = Omit<SessionState, 'updatedAt'>;
 
 export interface SessionStore {
   get(memberId: number, projectId: number): Promise<SessionState | undefined>;
+  /**
+   * Finds the session a given message belongs to.
+   *
+   * A button press carries no trustworthy project id — callback data is
+   * attacker-controlled — so the message being edited is the anchor that ties
+   * the press back to server-side state. A persistent implementation would keep
+   * a secondary index; the in-memory one scans, which is fine at this size.
+   */
+  findByMessage(memberId: number, messageId: number): Promise<SessionState | undefined>;
   set(state: SessionInput): Promise<void>;
   clear(memberId: number, projectId: number): Promise<void>;
 }
@@ -72,6 +81,21 @@ export function createInMemorySessionStore(
         return Promise.resolve(undefined);
       }
       return Promise.resolve(state);
+    },
+
+    findByMessage(memberId: number, messageId: number): Promise<SessionState | undefined> {
+      const currentTime = now();
+      for (const state of sessions.values()) {
+        if (state.memberId !== memberId || state.messageId !== messageId) {
+          continue;
+        }
+        if (currentTime - state.updatedAt > maxAgeMs) {
+          sessions.delete(sessionKey(state.memberId, state.projectId));
+          return Promise.resolve(undefined);
+        }
+        return Promise.resolve(state);
+      }
+      return Promise.resolve(undefined);
     },
 
     set(state: SessionInput): Promise<void> {

@@ -19,8 +19,11 @@ function problemsOf(source: Record<string, string | undefined>): readonly string
   throw new Error('expected parseEnv to reject');
 }
 
-/** LOG_LEVEL is optional and not a secret, so it is the one key with a default. */
-const WITH_DEFAULTS = { ...VALID, LOG_LEVEL: 'info' } as const;
+/**
+ * The keys that carry a default. Neither is a secret — falling back on one
+ * cannot point the process at the wrong database or the wrong bot.
+ */
+const WITH_DEFAULTS = { ...VALID, LOG_LEVEL: 'info', TRAIT_ROOT: 'trait-packs' } as const;
 
 describe('parseEnv', () => {
   it('accepts a complete, well-formed environment', () => {
@@ -83,5 +86,19 @@ describe('parseEnv', () => {
     expect(raised).toBeInstanceOf(EnvValidationError);
     expect(raised?.message).not.toContain(secret);
     expect(raised?.problems.join()).not.toContain(secret);
+  });
+});
+
+describe('TRAIT_ROOT', () => {
+  it('defaults when unset, since a wrong path fails loudly at render time', () => {
+    expect(parseEnv({ ...VALID }).TRAIT_ROOT).toBe('trait-packs');
+  });
+
+  it('takes an explicit value', () => {
+    expect(parseEnv({ ...VALID, TRAIT_ROOT: '/srv/packs' }).TRAIT_ROOT).toBe('/srv/packs');
+  });
+
+  it('rejects an empty value rather than silently defaulting it', () => {
+    expect(problemsOf({ ...VALID, TRAIT_ROOT: '' }).join()).toContain('TRAIT_ROOT');
   });
 });

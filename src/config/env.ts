@@ -34,6 +34,9 @@ export const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z
     .string()
     .regex(TELEGRAM_BOT_TOKEN_PATTERN, 'must have the shape <bot id>:<secret>'),
+  // Every trait image must resolve inside this directory; loadTraitImage
+  // refuses anything that escapes it, symlinks included.
+  TRAIT_ROOT: z.string().min(1).default('trait-packs'),
 });
 
 export type Env = z.infer<typeof envSchema>;

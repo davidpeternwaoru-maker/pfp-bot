@@ -1,6 +1,7 @@
 import { createBot } from './bot/bot.js';
 import { createRateLimiter } from './bot/rate-limit.js';
 import { createInMemorySessionStore } from './bot/session.js';
+import { createRenderCache } from './render/cache.js';
 import type { Env } from './config/env.js';
 import { EnvValidationError, loadEnv } from './config/env.js';
 import { createPrismaClient } from './db/client.js';
@@ -31,12 +32,15 @@ const logger = createLogger({ level: env.LOG_LEVEL });
 const prisma = createPrismaClient(env.DATABASE_URL);
 const sessions = createInMemorySessionStore();
 const rateLimiter = createRateLimiter({ limit: ACTIONS_PER_MINUTE, windowMs: 60_000 });
+const renderCache = createRenderCache();
 
 const bot = createBot({
   token: env.TELEGRAM_BOT_TOKEN,
   prisma,
   sessions,
   rateLimiter,
+  renderCache,
+  traitRoot: env.TRAIT_ROOT,
   logger,
 });
 
