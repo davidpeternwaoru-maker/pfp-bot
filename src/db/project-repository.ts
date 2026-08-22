@@ -57,3 +57,20 @@ export async function findProjectById(
     },
   });
 }
+
+export interface ClaimAnnounceSettings {
+  readonly name: string;
+  readonly announceOnClaim: boolean;
+  readonly telegramGroupId: bigint | null;
+}
+
+/** The announcement settings needed once a claim has succeeded. */
+export async function findAnnounceSettings(
+  prisma: PrismaClient,
+  projectId: number,
+): Promise<ClaimAnnounceSettings | null> {
+  return prisma.project.findUnique({
+    where: { id: projectId },
+    select: { name: true, announceOnClaim: true, telegramGroupId: true },
+  });
+}

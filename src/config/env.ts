@@ -37,6 +37,9 @@ export const envSchema = z.object({
   // Every trait image must resolve inside this directory; loadTraitImage
   // refuses anything that escapes it, symlinks included.
   TRAIT_ROOT: z.string().min(1).default('trait-packs'),
+  // Where claimed artwork is written. The database is the record of a claim;
+  // these files are a reproducible cache, since the render is deterministic.
+  CLAIM_ROOT: z.string().min(1).default('output/claims'),
 });
 
 export type Env = z.infer<typeof envSchema>;

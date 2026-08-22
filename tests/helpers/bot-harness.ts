@@ -133,6 +133,7 @@ export interface HarnessOptions {
   readonly rateLimiter?: RateLimiter;
   readonly renderCache?: RenderCache;
   readonly traitRoot?: string;
+  readonly claimRoot?: string;
 }
 
 const EMPTY_DB: FakeDatabase = {
@@ -210,6 +211,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
     rateLimiter: options.rateLimiter ?? createRateLimiter({ limit: 1000, windowMs: 60_000 }),
     renderCache: options.renderCache ?? createRenderCache(),
     traitRoot: options.traitRoot ?? '.',
+    claimRoot: options.claimRoot ?? '.',
     // Silenced: these tests assert on replies, not on log output.
     logger: createLogger({ level: 'error', write: () => undefined }),
     botInfo: BOT_INFO,
@@ -217,12 +219,17 @@ export function createHarness(options: HarnessOptions = {}): Harness {
 
   // Intercept outbound API calls instead of letting them reach Telegram.
   bot.api.config.use((_prev, method, payload) => {
+    // editMessageMedia nests its caption inside `media`; everything else is
+    // flat. Reading only the flat one would make a final claim caption
+    // invisible to every assertion.
+    const media = 'media' in payload ? (payload.media as { caption?: unknown }) : undefined;
+    const nestedCaption = typeof media?.caption === 'string' ? media.caption : undefined;
     const text =
       'text' in payload && typeof payload.text === 'string'
         ? payload.text
         : 'caption' in payload && typeof payload.caption === 'string'
           ? payload.caption
-          : undefined;
+          : nestedCaption;
 
     const messageId =
       'message_id' in payload && typeof payload.message_id === 'number'

@@ -10,6 +10,8 @@
 
 export const REROLL = 'r';
 export const CLAIM = 'c';
+export const CONFIRM_CLAIM = 'k';
+export const CANCEL_CLAIM = 'x';
 const SLOT_PREFIX = 's';
 
 /** Telegram's own ceiling is 64 bytes; ours is far below it. */
@@ -20,6 +22,8 @@ const SLOT_PATTERN = /^s(\d{1,2})$/;
 export type CallbackAction =
   | { readonly kind: 'reroll' }
   | { readonly kind: 'claim' }
+  | { readonly kind: 'confirm-claim' }
+  | { readonly kind: 'cancel-claim' }
   | { readonly kind: 'cycle-slot'; readonly slotIndex: number };
 
 export function slotAction(slotIndex: number): string {
@@ -45,6 +49,14 @@ export function parseCallbackData(
 
   if (raw === CLAIM) {
     return { kind: 'claim' };
+  }
+
+  if (raw === CONFIRM_CLAIM) {
+    return { kind: 'confirm-claim' };
+  }
+
+  if (raw === CANCEL_CLAIM) {
+    return { kind: 'cancel-claim' };
   }
 
   const match = SLOT_PATTERN.exec(raw);

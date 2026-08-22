@@ -32,6 +32,7 @@ const bot = createBot({
   rateLimiter: createRateLimiter({ limit: 1000, windowMs: 60_000 }),
   renderCache,
   traitRoot: env.TRAIT_ROOT,
+  claimRoot: env.CLAIM_ROOT,
   logger: createLogger({ level: 'error' }),
   botInfo: {
     id: 1,

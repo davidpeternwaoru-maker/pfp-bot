@@ -1,12 +1,15 @@
-import { Bot, GrammyError, HttpError } from 'grammy';
+import { Bot, GrammyError, HttpError, InputFile } from 'grammy';
 import type { Context } from 'grammy';
 import type { UserFromGetMe } from 'grammy/types';
 import { resolveMember } from '../db/member-repository.js';
 import {
+  findAnnounceSettings,
   findClaimForMember,
   findProjectById,
   findProjectBySlug,
 } from '../db/project-repository.js';
+import { findMemberClaim } from '../db/claim-repository.js';
+import { loadClaimArtwork } from '../claim/artwork.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import type { RenderCache } from '../render/cache.js';
 import { TraitImageError } from '../render/errors.js';
@@ -14,9 +17,16 @@ import type { Logger } from '../logging/logger.js';
 import { parseCallbackData } from './callback-data.js';
 import { resolveEntry } from './entry.js';
 import { normaliseUsername, parseStartPayload } from './payload.js';
+import { cancelConfirmation, performClaim, promptConfirmation } from './claim-flow.js';
+import type { ClaimFlowDependencies } from './claim-flow.js';
 import {
-  CLAIM_NOT_ENABLED,
+  CLAIM_CANCELLED,
+  CLAIM_COMBINATION_INVALID,
+  CLAIM_NEEDS_PROJECT,
+  CLAIM_NONE_YET,
+  CLAIM_RACE_LOST,
   entryReply,
+  existingClaimReply,
   GENERIC_ERROR,
   rateLimitReply,
   ROLL_EXHAUSTED,
@@ -37,6 +47,7 @@ export interface BotDependencies {
   readonly rateLimiter: RateLimiter;
   readonly renderCache: RenderCache;
   readonly traitRoot: string;
+  readonly claimRoot: string;
   readonly logger: Logger;
   /**
    * Supplying the bot's own identity skips the getMe call grammY would
@@ -57,6 +68,8 @@ export function createBot(deps: BotDependencies): Bot {
     traitRoot: deps.traitRoot,
     logger,
   };
+
+  const claimFlow: ClaimFlowDependencies = { ...roll, claimRoot: deps.claimRoot };
 
   // Rate limiting sits in front of every handler rather than on the expensive
   // ones individually, so a handler added in a later phase is covered without
@@ -139,6 +152,74 @@ export function createBot(deps: BotDependencies): Bot {
     }
   });
 
+  /**
+   * Returns the claim a member already holds, with the full-resolution file.
+   *
+   * The slug is required rather than inferred: a successful claim clears the
+   * session, so there is usually nothing left to infer from, and guessing the
+   * wrong collection would show someone the wrong artwork.
+   */
+  bot.command('mine', async (ctx) => {
+    const from = ctx.from;
+    if (from === undefined) {
+      return;
+    }
+
+    const member = await resolveMember(prisma, BigInt(from.id), normaliseUsername(from.username));
+    const log = logger.child({ memberId: member.id });
+
+    const argument = ctx.match.trim();
+    if (argument.length === 0) {
+      await ctx.reply(CLAIM_NEEDS_PROJECT);
+      return;
+    }
+
+    // Same validation as a deep link payload: this is attacker-controlled too.
+    const payload = parseStartPayload(argument);
+    if (!payload.ok) {
+      await ctx.reply(entryReply({ kind: 'unknown-project' }));
+      return;
+    }
+
+    const project = await findProjectBySlug(prisma, payload.slug);
+    if (project === null) {
+      await ctx.reply(entryReply({ kind: 'unknown-project' }));
+      return;
+    }
+
+    const claim = await findMemberClaim(prisma, project.id, member.id);
+    if (claim === null) {
+      await ctx.reply(CLAIM_NONE_YET);
+      return;
+    }
+
+    const pack = await loadPack(roll, project.id);
+    const artwork = await loadClaimArtwork(
+      deps.claimRoot,
+      deps.traitRoot,
+      claim.imagePath,
+      pack,
+      claim.traitIds,
+    );
+
+    const caption = existingClaimReply(claim.projectName, claim.editionNumber, claim.claimedAt);
+
+    if (artwork === null) {
+      // The row is the record of the claim, so it is still reported even when
+      // the artwork cannot be produced.
+      log.error('claim.artwork_unavailable', { projectId: project.id });
+      await ctx.reply(caption);
+      return;
+    }
+
+    // Sent as a document, not a photo: Telegram re-compresses photos, and the
+    // point of this command is the original file.
+    await ctx.replyWithDocument(
+      new InputFile(artwork, `edition-${String(claim.editionNumber)}.png`),
+      { caption },
+    );
+  });
+
   bot.on('callback_query:data', async (ctx) => {
     const from = ctx.from;
     const messageId = ctx.callbackQuery.message?.message_id;
@@ -181,28 +262,105 @@ export function createBot(deps: BotDependencies): Bot {
       return;
     }
 
+    const freshRoll = async (): Promise<void> => {
+      const presentation = await presentFreshRoll(ctx, roll, session, pack);
+      if (presentation.kind === 'exhausted') {
+        await ctx.reply(ROLL_EXHAUSTED);
+      } else if (presentation.kind === 'undetermined') {
+        await ctx.reply(ROLL_UNDETERMINED);
+      }
+    };
+
     try {
-      if (action.kind === 'claim') {
-        await ctx.reply(CLAIM_NOT_ENABLED);
-        return;
-      }
-
-      if (action.kind === 'reroll') {
-        const presentation = await presentFreshRoll(ctx, roll, session, pack);
-        if (presentation.kind === 'exhausted') {
-          await ctx.reply(ROLL_EXHAUSTED);
-        } else if (presentation.kind === 'undetermined') {
-          await ctx.reply(ROLL_UNDETERMINED);
+      switch (action.kind) {
+        case 'claim': {
+          // Never claims on the first press. A permanent, one-per-collection
+          // decision does not happen on a single tap.
+          if ((await promptConfirmation(ctx, session, pack)) === 'stale') {
+            await sessions.clear(session.memberId, session.projectId);
+            await ctx.reply(ROLL_STALE);
+          }
+          return;
         }
-        return;
-      }
 
-      const result = await presentSlotCycle(ctx, roll, session, pack, action.slotIndex);
-      if (result === 'stale') {
-        await sessions.clear(session.memberId, session.projectId);
-        await ctx.reply(ROLL_STALE);
-      } else if (result === 'unchanged') {
-        await ctx.reply(ROLL_SLOT_STUCK);
+        case 'cancel-claim': {
+          if ((await cancelConfirmation(ctx, session, pack)) === 'stale') {
+            await sessions.clear(session.memberId, session.projectId);
+            await ctx.reply(ROLL_STALE);
+          } else {
+            await ctx.reply(CLAIM_CANCELLED);
+          }
+          return;
+        }
+
+        case 'confirm-claim': {
+          const settings = await findAnnounceSettings(prisma, session.projectId);
+          if (settings === null) {
+            await ctx.reply(GENERIC_ERROR);
+            return;
+          }
+
+          const result = await performClaim(ctx, claimFlow, session, pack, {
+            projectName: settings.name,
+            announceOnClaim: settings.announceOnClaim,
+            telegramGroupId: settings.telegramGroupId,
+          });
+
+          switch (result.kind) {
+            case 'claimed':
+              return;
+
+            case 'race-lost':
+              // Losing a race is not the member's fault and costs them nothing:
+              // apologise and put a free combination in front of them at once.
+              log.info('claim.race_lost', { projectId: session.projectId });
+              await ctx.reply(CLAIM_RACE_LOST);
+              await freshRoll();
+              return;
+
+            case 'invalid':
+              await ctx.reply(CLAIM_COMBINATION_INVALID);
+              await freshRoll();
+              return;
+
+            case 'already-claimed':
+              await sessions.clear(session.memberId, session.projectId);
+              await ctx.reply(
+                entryReply({
+                  kind: 'already-claimed',
+                  projectName: settings.name,
+                  editionNumber: result.editionNumber,
+                }),
+              );
+              return;
+
+            case 'closed':
+              await sessions.clear(session.memberId, session.projectId);
+              await ctx.reply(entryReply({ kind: 'window-closed', projectName: settings.name }));
+              return;
+
+            case 'stale':
+              await sessions.clear(session.memberId, session.projectId);
+              await ctx.reply(ROLL_STALE);
+              return;
+          }
+          return;
+        }
+
+        case 'reroll':
+          await freshRoll();
+          return;
+
+        case 'cycle-slot': {
+          const result = await presentSlotCycle(ctx, roll, session, pack, action.slotIndex);
+          if (result === 'stale') {
+            await sessions.clear(session.memberId, session.projectId);
+            await ctx.reply(ROLL_STALE);
+          } else if (result === 'unchanged') {
+            await ctx.reply(ROLL_SLOT_STUCK);
+          }
+          return;
+        }
       }
     } catch (error) {
       // A broken trait image is an operator problem, not a member's. It gets a

@@ -42,6 +42,7 @@ const bot = createBot({
   rateLimiter,
   renderCache,
   traitRoot: env.TRAIT_ROOT,
+  claimRoot: env.CLAIM_ROOT,
   logger,
 });
 

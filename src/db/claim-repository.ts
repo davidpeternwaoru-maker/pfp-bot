@@ -23,3 +23,44 @@ export async function loadClaimedHashes(
 
   return new Set(rows.map((row) => row.combinationHash));
 }
+
+export interface MemberClaim {
+  readonly editionNumber: number;
+  readonly traitIds: readonly number[];
+  readonly imagePath: string;
+  readonly claimedAt: Date;
+  readonly projectName: string;
+}
+
+/**
+ * Reads through the one-claim-per-member constraint, so this can never see
+ * more than one row however the data got there.
+ */
+export async function findMemberClaim(
+  prisma: PrismaClient,
+  projectId: number,
+  memberId: number,
+): Promise<MemberClaim | null> {
+  const row = await prisma.claim.findUnique({
+    where: { projectId_memberId: { projectId, memberId } },
+    select: {
+      editionNumber: true,
+      traitIds: true,
+      imagePath: true,
+      claimedAt: true,
+      project: { select: { name: true } },
+    },
+  });
+
+  if (row === null) {
+    return null;
+  }
+
+  return {
+    editionNumber: row.editionNumber,
+    traitIds: row.traitIds,
+    imagePath: row.imagePath,
+    claimedAt: row.claimedAt,
+    projectName: row.project.name,
+  };
+}

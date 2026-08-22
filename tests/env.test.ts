@@ -23,7 +23,12 @@ function problemsOf(source: Record<string, string | undefined>): readonly string
  * The keys that carry a default. Neither is a secret — falling back on one
  * cannot point the process at the wrong database or the wrong bot.
  */
-const WITH_DEFAULTS = { ...VALID, LOG_LEVEL: 'info', TRAIT_ROOT: 'trait-packs' } as const;
+const WITH_DEFAULTS = {
+  ...VALID,
+  LOG_LEVEL: 'info',
+  TRAIT_ROOT: 'trait-packs',
+  CLAIM_ROOT: 'output/claims',
+} as const;
 
 describe('parseEnv', () => {
   it('accepts a complete, well-formed environment', () => {

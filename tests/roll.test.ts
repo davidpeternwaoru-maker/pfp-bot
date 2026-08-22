@@ -150,12 +150,13 @@ describe('rerolling and adjusting', () => {
     expect((await h.sessions.get(555, 1))?.traitIds).toEqual(start);
   });
 
-  it('claiming is refused with an explanation, not silence', async () => {
+  it('claiming asks for confirmation rather than acting on one press', async () => {
     const h = harness();
     await h.send('/start drop');
     await h.press('c', FIRST_MESSAGE);
 
-    expect(h.sent.at(-1)).toContain('not switched on yet');
+    expect(h.sent.at(-1)).toContain('Claim this one?');
+    expect(h.sent.at(-1)).toContain('permanent');
   });
 });
 

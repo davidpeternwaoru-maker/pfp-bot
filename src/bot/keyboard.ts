@@ -1,5 +1,5 @@
 import { InlineKeyboard } from 'grammy';
-import { CLAIM, REROLL, slotAction } from './callback-data.js';
+import { CANCEL_CLAIM, CLAIM, CONFIRM_CLAIM, REROLL, slotAction } from './callback-data.js';
 import type { TraitPack } from '../render/types.js';
 
 /** Beyond this, button labels start truncating on a narrow phone. */
@@ -26,4 +26,15 @@ export function rollKeyboard(pack: TraitPack): InlineKeyboard {
   keyboard.text('🎲 Reroll', REROLL).text('✓ Claim', CLAIM);
 
   return keyboard;
+}
+
+/**
+ * Shown only after a member presses Claim. Confirming is irreversible, so the
+ * destructive option is never one tap away from the rolling controls.
+ */
+export function confirmKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('Yes, claim it permanently', CONFIRM_CLAIM)
+    .row()
+    .text('Go back', CANCEL_CLAIM);
 }

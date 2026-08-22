@@ -56,9 +56,6 @@ export const ROLL_STALE = 'This roll has expired. Open the link again to start a
 
 export const ROLL_SLOT_STUCK = 'No other option fits there with what you are holding.';
 
-export const CLAIM_NOT_ENABLED =
-  'Claiming is not switched on yet. Your roll is safe — reroll away.';
-
 export const ROLL_RENDER_FAILED =
   'That combination would not render. Nothing is lost — try rerolling.';
 
@@ -66,4 +63,74 @@ export const ROLL_RENDER_FAILED =
 export function rollCaption(traits: readonly TraitRecord[]): string {
   const lines = traits.map((trait) => `${trait.slot}: ${trait.name}`);
   return [...lines, '', 'Reroll, adjust a slot, or claim it.'].join('\n');
+}
+
+/** Shown before a claim is committed. It must not undersell permanence. */
+export function claimConfirmPrompt(traits: readonly TraitRecord[]): string {
+  return [
+    'Claim this one?',
+    '',
+    ...traits.map((trait) => `${trait.slot}: ${trait.name}`),
+    '',
+    'This is permanent. The combination is locked to you and nobody else in this',
+    'collection can ever hold it. You get one claim per collection, so this will',
+    'be your only one here — you cannot swap it later.',
+  ].join('\n');
+}
+
+export function claimedReply(
+  projectName: string,
+  editionNumber: number,
+  traits: readonly TraitRecord[],
+): string {
+  return [
+    `Edition #${String(editionNumber)} of ${projectName} is yours.`,
+    '',
+    ...traits.map((trait) => `${trait.slot}: ${trait.name}`),
+    '',
+    'Locked to you permanently. Use /mine to get the full-resolution file.',
+  ].join('\n');
+}
+
+export const CLAIM_RACE_LOST =
+  'Sorry — somebody claimed that exact combination a moment before you. Nothing is lost. Here is a fresh one that is still free.';
+
+export const CLAIM_COMBINATION_INVALID =
+  'That combination is no longer available to claim. Here is a fresh one.';
+
+export const CLAIM_CANCELLED = 'Not claimed. Keep rolling.';
+
+export const CLAIM_NONE_YET =
+  'You have not claimed in this collection yet. Open the link again to roll one.';
+
+export const CLAIM_NEEDS_PROJECT =
+  'Tell me which collection: send /mine followed by its link name, or open the collection link again.';
+
+export function existingClaimReply(
+  projectName: string,
+  editionNumber: number,
+  claimedAt: Date,
+): string {
+  return [
+    `You hold edition #${String(editionNumber)} of ${projectName}.`,
+    `Claimed ${claimedAt.toISOString().slice(0, 10)}.`,
+    '',
+    'Full-resolution file attached.',
+  ].join('\n');
+}
+
+/**
+ * Posted to the community group. Deliberately does not name the claimant:
+ * claiming is not consent to be announced publicly, and the edition number is
+ * what the group actually cares about.
+ */
+export function announcementText(
+  projectName: string,
+  editionNumber: number,
+  traits: readonly TraitRecord[],
+): string {
+  return [
+    `Edition #${String(editionNumber)} of ${projectName} has been claimed.`,
+    traits.map((trait) => trait.name).join(' · '),
+  ].join('\n');
 }
