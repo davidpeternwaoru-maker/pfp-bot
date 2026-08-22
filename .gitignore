@@ -1,0 +1,17 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Secrets never enter the repository — .env.example carries the keys instead.
+.env
+.env.*
+!.env.example
+
+# Generated output: Prisma client, rendered images, trait pack working copies.
+src/generated/
+generated/
+output/
+coverage/
+
+.DS_Store
+Thumbs.db

@@ -1,0 +1,131 @@
+// Prisma 7 requires an explicit generator output; ESM to match the app.
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  runtime      = "nodejs"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum ProjectStatus {
+  draft
+  live
+  closed
+}
+
+enum TraitTier {
+  open
+  gated
+  legendary
+}
+
+/// A community running its own artwork pack and claim window.
+model Project {
+  id              Int           @id @default(autoincrement())
+  name            String
+  /// The deep link payload. Unique because it is the only thing resolving an
+  /// inbound /start to a project, and it is attacker-supplied.
+  slug            String        @unique
+  mascotName      String
+  status          ProjectStatus @default(draft)
+  claimOpensAt    DateTime?
+  claimClosesAt   DateTime?
+  canvasWidth     Int
+  canvasHeight    Int
+  telegramGroupId BigInt?
+  announceOnClaim Boolean       @default(false)
+  eligibilityRule Json          @default("{}")
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  traits     Trait[]
+  exclusions Exclusion[]
+  claims     Claim[]
+}
+
+/// One artwork layer option, e.g. slot "eyes", name "visor".
+model Trait {
+  id          Int       @id @default(autoincrement())
+  projectId   Int
+  slot        String
+  name        String
+  layerOrder  Int
+  imagePath   String
+  rarityWeight Int      @default(1)
+  tier        TraitTier @default(open)
+  createdAt   DateTime  @default(now())
+
+  project           Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  exclusionsAsTraitA Exclusion[] @relation("ExclusionTraitA")
+  exclusionsAsTraitB Exclusion[] @relation("ExclusionTraitB")
+
+  // A slot cannot offer the same option twice, and imports are re-runnable.
+  @@unique([projectId, slot, name])
+  @@index([projectId, slot])
+}
+
+/// A pair of traits that may never appear together in one combination.
+model Exclusion {
+  id        Int @id @default(autoincrement())
+  projectId Int
+  traitAId  Int
+  traitBId  Int
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  traitA  Trait   @relation("ExclusionTraitA", fields: [traitAId], references: [id], onDelete: Cascade)
+  traitB  Trait   @relation("ExclusionTraitB", fields: [traitBId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, traitAId, traitBId])
+  @@index([projectId])
+}
+
+/// A Telegram user. Only the identifiers needed to route a claim are stored.
+model Member {
+  id             Int      @id @default(autoincrement())
+  telegramUserId BigInt   @unique
+  username       String?
+  firstSeenAt    DateTime @default(now())
+  /// Reserved for a later on-chain phase. Unused, never written to for now.
+  walletAddress  String?
+
+  claims Claim[]
+}
+
+/// A permanently locked combination held by one member.
+model Claim {
+  id        Int @id @default(autoincrement())
+  projectId Int
+  memberId  Int
+
+  /// Stored as an array rather than a join table: a claimed combination is
+  /// immutable and is hashed as a single unit, so it has no independent rows.
+  traitIds        Int[]
+  combinationHash String
+  editionNumber   Int
+  tier            TraitTier @default(open)
+  imagePath       String
+  contentHash     String
+  /// Reserved for a later on-chain phase. Unused, never written to for now.
+  mintAddress     String?
+  claimedAt       DateTime  @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  member  Member  @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  // Without this, two members can hold the identical artwork. The product's
+  // entire premise — that your PFP is yours alone — dies at the first duplicate.
+  @@unique([projectId, combinationHash])
+
+  // Without this, one member can claim repeatedly and drain the open pool,
+  // making "one per member" a promise the code cannot keep.
+  @@unique([projectId, memberId])
+
+  // Without this, concurrent claims can be assigned the same edition number,
+  // so "#7 of 500" stops identifying anything.
+  @@unique([projectId, editionNumber])
+
+  @@index([memberId])
+}
