@@ -17,8 +17,13 @@ const POSTGRES_URL_PREFIXES = ['postgres://', 'postgresql://'] as const;
 // confusing 401 on the first API call.
 const TELEGRAM_BOT_TOKEN_PATTERN = /^\d{6,16}:[A-Za-z0-9_-]{30,}$/;
 
+export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
+
 export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']),
+  // Not a secret, so a default is safe here — unlike DATABASE_URL or the bot
+  // token, where falling back would mean running against the wrong thing.
+  LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
   DATABASE_URL: z
     .string()
     .min(1)

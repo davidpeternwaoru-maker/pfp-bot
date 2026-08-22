@@ -19,14 +19,25 @@ function problemsOf(source: Record<string, string | undefined>): readonly string
   throw new Error('expected parseEnv to reject');
 }
 
+/** LOG_LEVEL is optional and not a secret, so it is the one key with a default. */
+const WITH_DEFAULTS = { ...VALID, LOG_LEVEL: 'info' } as const;
+
 describe('parseEnv', () => {
   it('accepts a complete, well-formed environment', () => {
-    expect(parseEnv({ ...VALID })).toEqual(VALID);
+    expect(parseEnv({ ...VALID })).toEqual(WITH_DEFAULTS);
   });
 
   it('ignores unrelated variables rather than passing them through', () => {
     const parsed = parseEnv({ ...VALID, SOME_OTHER_VAR: 'x' });
-    expect(parsed).toEqual(VALID);
+    expect(parsed).toEqual(WITH_DEFAULTS);
+  });
+
+  it('takes an explicit LOG_LEVEL over the default', () => {
+    expect(parseEnv({ ...VALID, LOG_LEVEL: 'debug' }).LOG_LEVEL).toBe('debug');
+  });
+
+  it('rejects an unknown LOG_LEVEL rather than quietly falling back', () => {
+    expect(problemsOf({ ...VALID, LOG_LEVEL: 'verbose' }).join()).toContain('LOG_LEVEL');
   });
 
   it.each(['NODE_ENV', 'DATABASE_URL', 'TELEGRAM_BOT_TOKEN'] as const)(
