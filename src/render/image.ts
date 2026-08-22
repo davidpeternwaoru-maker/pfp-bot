@@ -1,6 +1,6 @@
-import { readFile, realpath, stat } from 'node:fs/promises';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { readFile, stat } from 'node:fs/promises';
 import sharp from 'sharp';
+import { resolveWithinRoot } from '../fs/within-root.js';
 import { TraitImageError } from './errors.js';
 import type { CanvasSize, TraitRecord } from './types.js';
 
@@ -18,36 +18,25 @@ export interface TraitImageOptions {
 }
 
 /**
- * Resolves a stored path against the pack root and refuses anything that
- * escapes it — including via a symlink, which is why the check runs again on
- * the real path. Stored paths are admin-supplied, not member-supplied, but a
- * bad trait import must not become arbitrary file read.
+ * Confines a stored path to the pack root, translating the shared containment
+ * result into the error type this module reports. Stored paths are
+ * admin-supplied rather than member-supplied, but a bad trait import must not
+ * become an arbitrary file read.
  */
-async function resolveWithinRoot(root: string, imagePath: string): Promise<string> {
-  const realRoot = await realpath(resolve(root));
-  const candidate = resolve(realRoot, imagePath);
-
-  const escapes = (target: string): boolean => {
-    const rel = relative(realRoot, target);
-    return rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
-  };
-
-  if (escapes(candidate)) {
-    throw new TraitImageError(imagePath, 'resolves outside the trait pack root');
+async function locateTraitImage(root: string, imagePath: string): Promise<string> {
+  const located = await resolveWithinRoot(root, imagePath);
+  if (located.ok) {
+    return located.path;
   }
 
-  let real: string;
-  try {
-    real = await realpath(candidate);
-  } catch {
-    throw new TraitImageError(imagePath, 'file does not exist');
-  }
+  const reason =
+    located.reason === 'missing'
+      ? 'file does not exist'
+      : located.reason === 'links-outside'
+        ? 'links outside the trait pack root'
+        : 'resolves outside the trait pack root';
 
-  if (escapes(real)) {
-    throw new TraitImageError(imagePath, 'links outside the trait pack root');
-  }
-
-  return real;
+  throw new TraitImageError(imagePath, reason);
 }
 
 /**
@@ -59,7 +48,7 @@ export async function loadTraitImage(
   options: TraitImageOptions,
 ): Promise<Buffer> {
   const maxBytes = options.maxBytes ?? MAX_TRAIT_IMAGE_BYTES;
-  const absolute = await resolveWithinRoot(options.root, imagePath);
+  const absolute = await locateTraitImage(options.root, imagePath);
 
   const info = await stat(absolute);
   if (!info.isFile()) {
