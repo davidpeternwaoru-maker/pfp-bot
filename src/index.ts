@@ -6,6 +6,7 @@ import type { Env } from './config/env.js';
 import { EnvValidationError, loadEnv } from './config/env.js';
 import { createPrismaClient } from './db/client.js';
 import { createLogger } from './logging/logger.js';
+import { createShutdown } from './shutdown.js';
 
 /**
  * Generous enough that no real member notices, tight enough that one client
@@ -44,22 +45,11 @@ const bot = createBot({
   logger,
 });
 
-let shuttingDown = false;
-
-async function shutdown(signal: NodeJS.Signals): Promise<void> {
-  // A second Ctrl-C must not start a parallel teardown.
-  if (shuttingDown) {
-    return;
-  }
-  shuttingDown = true;
-
-  logger.info('shutdown.started', { signal });
-  // Stopping the bot first lets the in-flight update finish before the
-  // database connection it is using goes away.
-  await bot.stop();
-  await prisma.$disconnect();
-  logger.info('shutdown.complete', { signal });
-}
+const shutdown = createShutdown({
+  stopBot: () => bot.stop(),
+  disconnectDatabase: () => prisma.$disconnect(),
+  logger,
+});
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, (received: NodeJS.Signals) => {

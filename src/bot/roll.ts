@@ -12,7 +12,7 @@ import { cycleSlot, resolveCombination } from '../roll/cycle.js';
 import type { Logger } from '../logging/logger.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { rollKeyboard } from './keyboard.js';
-import { rollCaption, ROLL_EXHAUSTED, ROLL_UNDETERMINED } from './replies.js';
+import { rollCaption } from './replies.js';
 import type { SessionState, SessionStore } from './session.js';
 
 export interface RollDependencies {
@@ -183,5 +183,3 @@ export async function presentSlotCycle(
 export async function loadPack(deps: RollDependencies, projectId: number): Promise<TraitPack> {
   return fetchTraitPack(deps.prisma, projectId);
 }
-
-export { ROLL_EXHAUSTED, ROLL_UNDETERMINED };

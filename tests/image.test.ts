@@ -10,18 +10,24 @@ import { contentHash } from '../src/render/hash.js';
 import { leftHalfPng, makeTempRoot, pixelAt, solidPng, trait } from './helpers/fixtures.js';
 
 /**
- * Windows without developer mode refuses symlink creation. Probed at collection
- * time so the symlink test reports as skipped rather than quietly passing
- * without exercising anything.
+ * Windows refuses file symlinks without developer mode, but grants directory
+ * junctions to anyone. Both resolve through realpath the same way, so the
+ * escape check can be exercised everywhere by picking whichever the platform
+ * allows rather than skipping the test on Windows.
  */
-const symlinksSupported = ((): boolean => {
-  const probe = mkdtempSync(join(tmpdir(), 'pfp-bot-symprobe-'));
+const LINK_KIND: 'file' | 'junction' | null = ((): 'file' | 'junction' | null => {
+  const probe = mkdtempSync(join(tmpdir(), 'pfp-bot-linkprobe-'));
   try {
     writeFileSync(join(probe, 'a'), 'x');
     symlinkSync(join(probe, 'a'), join(probe, 'b'));
-    return true;
+    return 'file';
   } catch {
-    return false;
+    try {
+      symlinkSync(probe, join(probe, 'j'), 'junction');
+      return 'junction';
+    } catch {
+      return null;
+    }
   } finally {
     rmSync(probe, { recursive: true, force: true });
   }
@@ -94,12 +100,24 @@ describe('loadTraitImage', () => {
     await expect(loadTraitImage('../escape.png', { canvas, root })).rejects.toThrow(/outside/);
   });
 
-  it.skipIf(!symlinksSupported)('refuses a symlink pointing outside the pack root', async () => {
+  it.skipIf(LINK_KIND === null)('refuses a link pointing outside the pack root', async () => {
     const outside = await makeTempRoot();
     await writeFile(join(outside, 'secret.png'), await solidPng(64, 64, RED));
-    await symlink(join(outside, 'secret.png'), join(root, 'nested', 'link.png'));
 
-    await expect(loadTraitImage('nested/link.png', { canvas, root })).rejects.toThrow(/outside/);
+    // The path inside the root is legitimate; only realpath reveals that it
+    // lands elsewhere. This is the case the second containment check exists for.
+    const referenced =
+      LINK_KIND === 'file'
+        ? await (async () => {
+            await symlink(join(outside, 'secret.png'), join(root, 'nested', 'link.png'));
+            return 'nested/link.png';
+          })()
+        : await (async () => {
+            await symlink(outside, join(root, 'nested', 'escape'), 'junction');
+            return 'nested/escape/secret.png';
+          })();
+
+    await expect(loadTraitImage(referenced, { canvas, root })).rejects.toThrow(/outside/);
     await rm(outside, { recursive: true, force: true });
   });
 

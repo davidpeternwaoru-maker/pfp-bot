@@ -59,7 +59,7 @@ function extractImage(value: unknown): Buffer | null {
   if (value === null || typeof value !== 'object' || !('fileData' in value)) {
     return null;
   }
-  const data = (value).fileData;
+  const data = value.fileData;
   return Buffer.isBuffer(data) ? data : null;
 }
 
