@@ -73,9 +73,13 @@ async function announce(
   projectName: string,
   editionNumber: number,
   traits: readonly TraitRecord[],
+  claimantUsername: string | null,
 ): Promise<void> {
   try {
-    await api.sendMessage(Number(groupId), announcementText(projectName, editionNumber, traits));
+    await api.sendMessage(
+      Number(groupId),
+      announcementText(projectName, editionNumber, traits, claimantUsername),
+    );
   } catch (error) {
     logger.warn('announce.failed', {
       editionNumber,
@@ -88,6 +92,8 @@ export interface ClaimContext {
   readonly projectName: string;
   readonly announceOnClaim: boolean;
   readonly telegramGroupId: bigint | null;
+  /** Already validated by normaliseUsername; null when the member has none. */
+  readonly claimantUsername: string | null;
 }
 
 export async function performClaim(
@@ -154,6 +160,7 @@ export async function performClaim(
           project.projectName,
           claim.editionNumber,
           current,
+          project.claimantUsername,
         );
       }
 

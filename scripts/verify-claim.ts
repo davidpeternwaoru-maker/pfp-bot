@@ -98,7 +98,12 @@ async function send(text: string): Promise<void> {
       message_id: updateId,
       date: Math.floor(Date.now() / 1000),
       chat: { id: TELEGRAM_USER_ID, type: 'private', first_name: 'Verifier' },
-      from: { id: TELEGRAM_USER_ID, is_bot: false, first_name: 'Verifier' },
+      from: {
+        id: TELEGRAM_USER_ID,
+        is_bot: false,
+        first_name: 'Verifier',
+        username: 'verifier_user',
+      },
       text,
       entities: [{ type: 'bot_command', offset: 0, length: text.split(' ')[0]?.length ?? 6 }],
     },
@@ -111,7 +116,12 @@ async function press(data: string, messageId: number): Promise<void> {
     update_id: updateId,
     callback_query: {
       id: String(updateId),
-      from: { id: TELEGRAM_USER_ID, is_bot: false, first_name: 'Verifier' },
+      from: {
+        id: TELEGRAM_USER_ID,
+        is_bot: false,
+        first_name: 'Verifier',
+        username: 'verifier_user',
+      },
       chat_instance: 'verify',
       data,
       message: {
@@ -186,6 +196,15 @@ try {
         call.text?.includes(`#${String(claim.editionNumber)}`) === true,
     );
     report('final image shows the edition number', finalImage);
+
+    const announcement = calls.find(
+      (call) => call.method === 'sendMessage' && call.text?.includes('just claimed') === true,
+    );
+    report(
+      'announcement names the claimant',
+      announcement?.text?.includes('@verifier_user') === true,
+      announcement?.text?.split('\n')[0] ?? 'no announcement attempted',
+    );
 
     const announceFailed = logLines.some((line) => line.includes('announce.failed'));
     const claimCompleted = logLines.some((line) => line.includes('claim.completed'));

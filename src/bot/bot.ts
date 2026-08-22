@@ -304,6 +304,7 @@ export function createBot(deps: BotDependencies): Bot {
             projectName: settings.name,
             announceOnClaim: settings.announceOnClaim,
             telegramGroupId: settings.telegramGroupId,
+            claimantUsername: normaliseUsername(from.username),
           });
 
           switch (result.kind) {

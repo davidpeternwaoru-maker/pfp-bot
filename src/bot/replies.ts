@@ -120,17 +120,22 @@ export function existingClaimReply(
 }
 
 /**
- * Posted to the community group. Deliberately does not name the claimant:
- * claiming is not consent to be announced publicly, and the edition number is
- * what the group actually cares about.
+ * Posted to the community group.
+ *
+ * The handle is safe to interpolate: normaliseUsername has already restricted
+ * it to [A-Za-z0-9_]{1,32}, and nothing in this file sets a parse mode, so it
+ * renders literally rather than as markup. A member with no username is still
+ * announced, just without one.
  */
 export function announcementText(
   projectName: string,
   editionNumber: number,
   traits: readonly TraitRecord[],
+  claimantUsername: string | null,
 ): string {
+  const who = claimantUsername === null ? 'A member' : `@${claimantUsername}`;
   return [
-    `Edition #${String(editionNumber)} of ${projectName} has been claimed.`,
+    `${who} just claimed edition #${String(editionNumber)} of ${projectName}.`,
     traits.map((trait) => trait.name).join(' · '),
   ].join('\n');
 }
