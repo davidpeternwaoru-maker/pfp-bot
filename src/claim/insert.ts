@@ -47,14 +47,17 @@ export async function insertClaim(input: InsertClaimInput): Promise<InsertClaimR
       // Locks the project row for the rest of the transaction, so concurrent
       // claims on this project queue rather than interleave. Without it, two
       // claims read the same MAX(editionNumber) and both try to use it.
-      await tx.$queryRaw`SELECT id FROM "Project" WHERE id = ${projectId} FOR UPDATE`;
+      //
+      // The status is read by the same statement that takes the lock. Every
+      // round trip here is made while holding an exclusive lock that all other
+      // claimants are queued behind, so each one costs a full network latency
+      // of throughput for the whole project, not just for this claimant.
+      const projects = await tx.$queryRaw<
+        { status: string; claimClosesAt: Date | null }[]
+      >`SELECT "status"::text, "claimClosesAt" FROM "Project" WHERE id = ${projectId} FOR UPDATE`;
 
-      const project = await tx.project.findUnique({
-        where: { id: projectId },
-        select: { status: true, claimClosesAt: true },
-      });
-
-      if (project === null) {
+      const project = projects[0];
+      if (project === undefined) {
         return null;
       }
 
@@ -69,27 +72,25 @@ export async function insertClaim(input: InsertClaimInput): Promise<InsertClaimR
         }
       }
 
-      const rows = await tx.$queryRaw<{ max: number | null }[]>`
-        SELECT MAX("editionNumber")::int AS max FROM "Claim" WHERE "projectId" = ${projectId}
+      // The edition number is chosen and the row written by one statement, so
+      // the counter is read inside the same round trip that uses it. Safe only
+      // because of the lock above; without it, two of these would still read
+      // the same MAX. The unique index remains the thing that guarantees it.
+      const openMarker = asOpenClaim ? memberId : null;
+      const inserted = await tx.$queryRaw<{ id: number; editionNumber: number }[]>`
+        INSERT INTO "Claim" (
+          "projectId", "memberId", "traitIds", "combinationHash",
+          "editionNumber", "tier", "imagePath", "contentHash", "openClaimMemberId"
+        )
+        SELECT
+          ${projectId}, ${memberId}, ${[...input.traitIds]}::int[], ${input.combinationHash},
+          COALESCE(MAX("editionNumber"), 0) + 1, ${input.tier}::"TraitTier",
+          ${input.imagePath}, ${input.contentHash}, ${openMarker}::int
+        FROM "Claim" WHERE "projectId" = ${projectId}
+        RETURNING id, "editionNumber"
       `;
-      const editionNumber = (rows[0]?.max ?? 0) + 1;
 
-      return tx.claim.create({
-        data: {
-          projectId,
-          memberId,
-          traitIds: [...input.traitIds],
-          combinationHash: input.combinationHash,
-          editionNumber,
-          tier: input.tier,
-          imagePath: input.imagePath,
-          contentHash: input.contentHash,
-          // The marker that scopes the unique index to open claims. Null here
-          // is what lets a member hold awards alongside their open one.
-          openClaimMemberId: asOpenClaim ? memberId : null,
-        },
-        select: { id: true, editionNumber: true },
-      });
+      return inserted[0] ?? null;
     },
     { timeout: TRANSACTION_TIMEOUT_MS, maxWait: TRANSACTION_MAX_WAIT_MS },
   );

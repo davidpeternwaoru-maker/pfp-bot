@@ -25,7 +25,8 @@
     "seed:traits": "tsx scripts/seed-trait-pack.ts",
     "verify:roll": "tsx scripts/verify-roll.ts",
     "verify:claim": "tsx scripts/verify-claim.ts",
-    "award": "tsx scripts/award-legendary.ts"
+    "award": "tsx scripts/award-legendary.ts",
+    "bench:claims": "tsx scripts/bench-claims.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.9.1",
