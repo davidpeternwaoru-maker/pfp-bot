@@ -6,6 +6,7 @@ import { renderCombination } from '../render/image.js';
 import type { TraitPack, TraitRecord } from '../render/types.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { classifyClaimConflict } from './conflict.js';
+import { insertClaim } from './insert.js';
 
 /**
  * Claiming: the one operation in the product that must never be wrong.
@@ -46,15 +47,6 @@ export interface ClaimRequest {
   readonly traitRoot: string;
   readonly claimRoot: string;
 }
-
-/**
- * Prisma's default interactive transaction budget is five seconds. Concurrent
- * claims queue on a row lock, so a burst can legitimately spend longer waiting
- * than working, and timing out mid-burst would fail claims that were about to
- * succeed.
- */
-const TRANSACTION_TIMEOUT_MS = 20_000;
-const TRANSACTION_MAX_WAIT_MS = 15_000;
 
 function claimImagePath(projectId: number, hash: string): string {
   return join(String(projectId), `${hash}.png`);
@@ -103,58 +95,27 @@ export async function claimCombination(request: ClaimRequest): Promise<ClaimOutc
   await writeFile(absolutePath, image);
 
   try {
-    const created = await prisma.$transaction(
-      async (tx) => {
-        // Locks the project row for the rest of the transaction, so concurrent
-        // claims on this project queue rather than interleave. Without it, two
-        // claims could read the same MAX(editionNumber) and both try to use it.
-        await tx.$queryRaw`SELECT id FROM "Project" WHERE id = ${pack.projectId} FOR UPDATE`;
+    const inserted = await insertClaim({
+      prisma,
+      projectId: pack.projectId,
+      memberId,
+      traitIds,
+      combinationHash: hash,
+      contentHash: imageDigest,
+      imagePath: relativePath,
+      tier: 'open',
+      asOpenClaim: true,
+    });
 
-        const project = await tx.project.findUnique({
-          where: { id: pack.projectId },
-          select: { status: true, claimClosesAt: true },
-        });
-
-        // Fail closed. A drop that closed while the member was deciding must
-        // not accept the claim.
-        if (project === null || project.status !== 'live') {
-          return null;
-        }
-        if (project.claimClosesAt !== null && new Date() >= project.claimClosesAt) {
-          return null;
-        }
-
-        const rows = await tx.$queryRaw<{ max: number | null }[]>`
-          SELECT MAX("editionNumber")::int AS max FROM "Claim" WHERE "projectId" = ${pack.projectId}
-        `;
-        const editionNumber = (rows[0]?.max ?? 0) + 1;
-
-        return tx.claim.create({
-          data: {
-            projectId: pack.projectId,
-            memberId,
-            traitIds: [...traitIds],
-            combinationHash: hash,
-            editionNumber,
-            tier: 'open',
-            imagePath: relativePath,
-            contentHash: imageDigest,
-          },
-          select: { id: true, editionNumber: true },
-        });
-      },
-      { timeout: TRANSACTION_TIMEOUT_MS, maxWait: TRANSACTION_MAX_WAIT_MS },
-    );
-
-    if (created === null) {
+    if (inserted.kind === 'project-closed') {
       return { kind: 'project-closed' };
     }
 
     return {
       kind: 'claimed',
       claim: {
-        id: created.id,
-        editionNumber: created.editionNumber,
+        id: inserted.id,
+        editionNumber: inserted.editionNumber,
         combinationHash: hash,
         contentHash: imageDigest,
         imagePath: relativePath,
@@ -171,7 +132,10 @@ export async function claimCombination(request: ClaimRequest): Promise<ClaimOutc
 
     if (conflict === 'member') {
       const existing = await prisma.claim.findUnique({
-        where: { projectId_memberId: { projectId: pack.projectId, memberId } },
+        // Read through the same index that refused the write.
+        where: {
+          projectId_openClaimMemberId: { projectId: pack.projectId, openClaimMemberId: memberId },
+        },
         select: { editionNumber: true },
       });
       // The constraint fired, so a row must exist; if the read still comes back

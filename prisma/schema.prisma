@@ -108,6 +108,11 @@ model Claim {
   tier            TraitTier @default(open)
   imagePath       String
   contentHash     String
+  /// Equals memberId for open claims and null for awards, which is what makes
+  /// the unique index below apply to open claims only: Postgres treats nulls
+  /// as distinct, so a member may hold any number of awarded claims but only
+  /// one open one. Set in exactly one place, insertClaim.
+  openClaimMemberId Int?
   /// Reserved for a later on-chain phase. Unused, never written to for now.
   mintAddress     String?
   claimedAt       DateTime  @default(now())
@@ -119,9 +124,18 @@ model Claim {
   // entire premise — that your PFP is yours alone — dies at the first duplicate.
   @@unique([projectId, combinationHash])
 
-  // Without this, one member can claim repeatedly and drain the open pool,
-  // making "one per member" a promise the code cannot keep.
-  @@unique([projectId, memberId])
+  // One OPEN claim per member per project. Without it, one member can claim
+  // repeatedly and drain the open pool, making "one per member" a promise the
+  // code cannot keep.
+  //
+  // Scoped to open claims because a hand-awarded legendary is meant to sit
+  // alongside a member's open claim rather than block it. That scoping is
+  // carried by openClaimMemberId above rather than by a partial index: a
+  // partial index is not expressible here, so it would live only in raw
+  // migration SQL, and `prisma migrate dev` regenerates migrations and
+  // discards it — leaving no enforcement at all, silently.
+  @@unique([projectId, openClaimMemberId])
+  @@index([projectId, memberId])
 
   // Without this, concurrent claims can be assigned the same edition number,
   // so "#7 of 500" stops identifying anything.

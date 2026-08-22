@@ -15,6 +15,8 @@ import { loadEnv } from '../src/config/env.js';
 import { createPrismaClient } from '../src/db/client.js';
 import { createRenderCache } from '../src/render/cache.js';
 import { createLogger } from '../src/logging/logger.js';
+import { fetchTraitPack } from '../src/db/trait-pack-repository.js';
+import { drawUnclaimed } from '../src/roll/pool.js';
 
 const env = loadEnv();
 const prisma = createPrismaClient(env.DATABASE_URL);
@@ -139,6 +141,21 @@ for (let i = 0; i < 20; i += 1) {
   await press(i % 3 === 0 ? 'r' : `s${String(i % 4)}`, messageId);
 }
 
+// Reserved artwork must be unreachable by rolling against the real pack, not
+// just against a fixture. Cheap to check, and it is the promise made to
+// whoever holds an awarded legendary.
+const livePack = await fetchTraitPack(prisma, 3);
+const reserved = new Set(
+  livePack.slots.flatMap((slot) => slot.traits.filter((t) => t.tier !== 'open').map((t) => t.id)),
+);
+let reservedSeen = 0;
+for (let i = 0; i < 5_000; i += 1) {
+  const drawn = drawUnclaimed({ pack: livePack, isClaimed: () => false });
+  if (drawn.kind === 'drawn' && drawn.traits.some((t) => reserved.has(t.id))) {
+    reservedSeen += 1;
+  }
+}
+
 const outDir = join('output', 'verify');
 await mkdir(outDir, { recursive: true });
 for (const [index, image] of images.slice(0, 4).entries()) {
@@ -162,6 +179,7 @@ process.stdout.write(
     `sendMessage         ${String(textCount)}`,
     `distinct images     ${String(new Set(images.map((i) => i.length)).size)} of ${String(images.length)} by size`,
     `render cache        ${String(renderCache.size())} entries`,
+    `reserved traits     ${String(reserved.size)} in pack, seen in ${String(reservedSeen)} of 5000 draws (must be 0)`,
     `samples written     ${outDir}`,
     '',
     'final caption:',

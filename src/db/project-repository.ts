@@ -30,9 +30,11 @@ export async function findClaimForMember(
   memberId: number,
 ): Promise<EntryExistingClaim | null> {
   return prisma.claim.findUnique({
-    // Reads through the same unique constraint that enforces one claim per
-    // member, so this can never see more than one row.
-    where: { projectId_memberId: { projectId, memberId } },
+    // Reads through the same unique index that enforces one OPEN claim per
+    // member, so this can never see more than one row. Scoped to open claims
+    // on purpose: an awarded legendary must not stop a member rolling the
+    // open pool, which they have not yet claimed from.
+    where: { projectId_openClaimMemberId: { projectId, openClaimMemberId: memberId } },
     select: { editionNumber: true },
   });
 }

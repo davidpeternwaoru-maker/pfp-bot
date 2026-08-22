@@ -8,13 +8,14 @@ import {
   findProjectById,
   findProjectBySlug,
 } from '../db/project-repository.js';
-import { findMemberClaim } from '../db/claim-repository.js';
+import { findCollection, findMemberClaims } from '../db/claim-repository.js';
 import { loadClaimArtwork } from '../claim/artwork.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import type { RenderCache } from '../render/cache.js';
 import { TraitImageError } from '../render/errors.js';
 import type { Logger } from '../logging/logger.js';
-import { parseCallbackData } from './callback-data.js';
+import { parseCallbackData, parseCollectionPage } from './callback-data.js';
+import { collectionKeyboard, renderCollectionPage } from './collection.js';
 import { resolveEntry } from './entry.js';
 import { normaliseUsername, parseStartPayload } from './payload.js';
 import { cancelConfirmation, performClaim, promptConfirmation } from './claim-flow.js';
@@ -187,37 +188,65 @@ export function createBot(deps: BotDependencies): Bot {
       return;
     }
 
-    const claim = await findMemberClaim(prisma, project.id, member.id);
-    if (claim === null) {
+    const claims = await findMemberClaims(prisma, project.id, member.id);
+    if (claims.length === 0) {
       await ctx.reply(CLAIM_NONE_YET);
       return;
     }
 
     const pack = await loadPack(roll, project.id);
-    const artwork = await loadClaimArtwork(
-      deps.claimRoot,
-      deps.traitRoot,
-      claim.imagePath,
-      pack,
-      claim.traitIds,
-    );
 
-    const caption = existingClaimReply(claim.projectName, claim.editionNumber, claim.claimedAt);
+    // A member can hold their open claim plus any awarded ones, so each is
+    // sent as its own file rather than picking one and hiding the rest.
+    for (const claim of claims) {
+      const artwork = await loadClaimArtwork(
+        deps.claimRoot,
+        deps.traitRoot,
+        claim.imagePath,
+        pack,
+        claim.traitIds,
+      );
 
-    if (artwork === null) {
-      // The row is the record of the claim, so it is still reported even when
-      // the artwork cannot be produced.
-      log.error('claim.artwork_unavailable', { projectId: project.id });
-      await ctx.reply(caption);
+      const caption = existingClaimReply(
+        claim.projectName,
+        claim.editionNumber,
+        claim.claimedAt,
+        claim.tier,
+      );
+
+      if (artwork === null) {
+        // The row is the record of the claim, so it is still reported even
+        // when the artwork cannot be produced.
+        log.error('claim.artwork_unavailable', {
+          projectId: project.id,
+          editionNumber: claim.editionNumber,
+        });
+        await ctx.reply(caption);
+        continue;
+      }
+
+      // Sent as a document, not a photo: Telegram re-compresses photos, and
+      // the point of this command is the original file.
+      await ctx.replyWithDocument(
+        new InputFile(artwork, `edition-${String(claim.editionNumber)}.png`),
+        { caption },
+      );
+    }
+  });
+
+  /** Every claim the member holds, across every collection. */
+  bot.command('collection', async (ctx) => {
+    const from = ctx.from;
+    if (from === undefined) {
       return;
     }
 
-    // Sent as a document, not a photo: Telegram re-compresses photos, and the
-    // point of this command is the original file.
-    await ctx.replyWithDocument(
-      new InputFile(artwork, `edition-${String(claim.editionNumber)}.png`),
-      { caption },
-    );
+    const member = await resolveMember(prisma, BigInt(from.id), normaliseUsername(from.username));
+    const entries = await findCollection(prisma, member.id);
+    const page = renderCollectionPage(entries, 0);
+    const keyboard = collectionKeyboard(page);
+
+    await ctx.reply(page.text, keyboard === undefined ? {} : { reply_markup: keyboard });
   });
 
   bot.on('callback_query:data', async (ctx) => {
@@ -234,6 +263,27 @@ export function createBot(deps: BotDependencies): Bot {
 
     const member = await resolveMember(prisma, BigInt(from.id), normaliseUsername(from.username));
     const log = logger.child({ memberId: member.id });
+
+    // Collection paging belongs to a message with no roll behind it, so it is
+    // handled before any session lookup. The member id comes from the sender,
+    // never from the payload, so nobody can page through someone else's
+    // collection.
+    const requestedPage = parseCollectionPage(ctx.callbackQuery.data);
+    if (requestedPage !== null) {
+      const entries = await findCollection(prisma, member.id);
+      const page = renderCollectionPage(entries, requestedPage);
+      const keyboard = collectionKeyboard(page);
+      const chatId = ctx.chat?.id;
+      if (chatId !== undefined) {
+        await ctx.api.editMessageText(
+          chatId,
+          messageId,
+          page.text,
+          keyboard === undefined ? {} : { reply_markup: keyboard },
+        );
+      }
+      return;
+    }
 
     // The session is found from the message, never from the callback payload.
     const session = await sessions.findByMessage(member.id, messageId);

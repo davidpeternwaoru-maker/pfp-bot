@@ -1,5 +1,5 @@
 import type { EntryOutcome } from './entry.js';
-import type { TraitRecord } from '../render/types.js';
+import type { TraitRecord, TraitTier } from '../render/types.js';
 
 /**
  * Every reply is plain text and no handler ever sets parse_mode. A project
@@ -110,9 +110,11 @@ export function existingClaimReply(
   projectName: string,
   editionNumber: number,
   claimedAt: Date,
+  tier: TraitTier = 'open',
 ): string {
+  const badge = tier === 'open' ? '' : ` (${tier})`;
   return [
-    `You hold edition #${String(editionNumber)} of ${projectName}.`,
+    `You hold edition #${String(editionNumber)} of ${projectName}${badge}.`,
     `Claimed ${claimedAt.toISOString().slice(0, 10)}.`,
     '',
     'Full-resolution file attached.',

@@ -28,6 +28,8 @@ const WITH_DEFAULTS = {
   LOG_LEVEL: 'info',
   TRAIT_ROOT: 'trait-packs',
   CLAIM_ROOT: 'output/claims',
+  // Empty authorises nobody, which is the safe default for an allowlist.
+  ADMIN_TELEGRAM_IDS: [],
 } as const;
 
 describe('parseEnv', () => {
@@ -105,5 +107,36 @@ describe('TRAIT_ROOT', () => {
 
   it('rejects an empty value rather than silently defaulting it', () => {
     expect(problemsOf({ ...VALID, TRAIT_ROOT: '' }).join()).toContain('TRAIT_ROOT');
+  });
+});
+
+describe('ADMIN_TELEGRAM_IDS', () => {
+  it('authorises nobody when unset, rather than everybody', () => {
+    expect(parseEnv({ ...VALID }).ADMIN_TELEGRAM_IDS).toEqual([]);
+  });
+
+  it('parses a comma-separated list into ids', () => {
+    expect(parseEnv({ ...VALID, ADMIN_TELEGRAM_IDS: '123,456' }).ADMIN_TELEGRAM_IDS).toEqual([
+      123n,
+      456n,
+    ]);
+  });
+
+  it('tolerates spacing and trailing separators', () => {
+    expect(parseEnv({ ...VALID, ADMIN_TELEGRAM_IDS: ' 123 , 456 , ' }).ADMIN_TELEGRAM_IDS).toEqual([
+      123n,
+      456n,
+    ]);
+  });
+
+  it('refuses to start on a malformed id rather than dropping it', () => {
+    // Silently ignoring a typo would shrink the allowlist without anyone
+    // noticing, which for an authorisation list is the wrong way to fail.
+    expect(problemsOf({ ...VALID, ADMIN_TELEGRAM_IDS: '123,not-an-id' }).join()).toContain(
+      'ADMIN_TELEGRAM_IDS',
+    );
+    expect(problemsOf({ ...VALID, ADMIN_TELEGRAM_IDS: '@someone' }).join()).toContain(
+      'ADMIN_TELEGRAM_IDS',
+    );
   });
 });

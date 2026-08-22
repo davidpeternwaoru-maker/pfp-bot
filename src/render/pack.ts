@@ -112,7 +112,20 @@ export function buildTraitPack(input: TraitPackInput): TraitPack {
   };
 }
 
-/** Open-tier options for a slot — the only ones the open pool may draw from. */
+/**
+ * Open-tier options for a slot — the only ones the open pool may draw from.
+ *
+ * This is the single gate between reserved artwork and rolling, which is why
+ * every path that picks a trait goes through it: the random selector, the pool
+ * sweep, the slot cycler, and the capacity count.
+ *
+ * Reserved traits that are never awarded stay out of the pool permanently.
+ * There is no end-of-drop release and there must not be one. Holders were told
+ * a legendary is one of a handful in existence; quietly returning the
+ * unawarded ones to the open pool would print more of a thing whose whole
+ * value is that no more exist. It would also be invisible — nobody's artwork
+ * changes — so the promise would break with nothing to show for it.
+ */
 export function openTraits(slot: TraitSlot): readonly TraitRecord[] {
   return slot.traits.filter((trait) => trait.tier === 'open');
 }

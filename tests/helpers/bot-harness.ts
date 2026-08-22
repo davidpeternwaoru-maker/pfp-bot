@@ -90,20 +90,30 @@ export function fakePrisma(db: FakeDatabase): PrismaClient {
       findMany: () => Promise.resolve(db.exclusions ?? []),
     },
     claim: {
+      // Reads through the scoped index, matching the real one-open-claim-per
+      // -member lookup rather than the blanket one it replaced.
       findUnique: (args: {
-        where: { projectId_memberId: { projectId: number; memberId: number } };
+        where: { projectId_openClaimMemberId: { projectId: number; openClaimMemberId: number } };
       }) => {
-        const { projectId, memberId } = args.where.projectId_memberId;
+        const { projectId, openClaimMemberId } = args.where.projectId_openClaimMemberId;
         return Promise.resolve(
-          db.claimsByProjectAndMember.get(`${String(projectId)}:${String(memberId)}`) ?? null,
+          db.claimsByProjectAndMember.get(`${String(projectId)}:${String(openClaimMemberId)}`) ??
+            null,
         );
       },
-      findMany: (args: { where: { projectId: number } }) =>
-        Promise.resolve(
-          (db.claimedHashes?.get(args.where.projectId) ?? []).map((combinationHash) => ({
+      findMany: (args: { where: { projectId?: number; memberId?: number } }) => {
+        // Two different callers land here: the claimed-hash scan for a
+        // project, and the per-member lookups behind /mine and /collection.
+        if (args.where.memberId !== undefined) {
+          return Promise.resolve([]);
+        }
+        const projectId = args.where.projectId ?? 0;
+        return Promise.resolve(
+          (db.claimedHashes?.get(projectId) ?? []).map((combinationHash) => ({
             combinationHash,
           })),
-        ),
+        );
+      },
     },
   };
 

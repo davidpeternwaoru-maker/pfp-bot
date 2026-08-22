@@ -40,6 +40,22 @@ export const envSchema = z.object({
   // Where claimed artwork is written. The database is the record of a claim;
   // these files are a reproducible cache, since the render is deterministic.
   CLAIM_ROOT: z.string().min(1).default('output/claims'),
+  /**
+   * Telegram user ids permitted to award legendaries, comma separated.
+   * Defaults to empty, which authorises nobody: an unset allowlist must mean
+   * no one can award, never everyone.
+   */
+  ADMIN_TELEGRAM_IDS: z
+    .string()
+    .default('')
+    .transform((raw) =>
+      raw
+        .split(',')
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0),
+    )
+    .pipe(z.array(z.string().regex(/^\d{1,19}$/, 'must be a numeric Telegram user id')))
+    .transform((ids) => ids.map((id) => BigInt(id))),
 });
 
 export type Env = z.infer<typeof envSchema>;

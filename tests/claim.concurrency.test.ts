@@ -249,7 +249,7 @@ describe.skipIf(DATABASE_URL === undefined)('concurrent claiming', () => {
     }
 
     const stored = await prisma.claim.findUniqueOrThrow({
-      where: { projectId_memberId: { projectId, memberId } },
+      where: { projectId_openClaimMemberId: { projectId, openClaimMemberId: memberId } },
       select: { imagePath: true, contentHash: true, combinationHash: true, traitIds: true },
     });
 
