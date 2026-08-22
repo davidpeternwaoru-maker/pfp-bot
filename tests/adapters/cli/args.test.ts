@@ -7,7 +7,8 @@ import {
   requireIdList,
   requireInt,
   requireSlug,
-  requireTelegramId,
+  requireIdentity,
+  requireMemberReference,
 } from '../../../src/adapters/cli/args.js';
 import { CliError } from '../../../src/adapters/cli/errors.js';
 
@@ -67,7 +68,10 @@ describe('validation', () => {
     expect(requireInt(args, 'n')).toBe(42);
     expect(requireIdList(args, 'ids')).toEqual([3, 1, 2]);
     expect(optionalDate(args, 'when')?.toISOString()).toBe('2026-09-01T12:00:00.000Z');
-    expect(requireTelegramId(args, 'tg')).toBe(123456789n);
+    expect(requireIdentity(parseArgv(['x', '--who', 'telegram:123456789']), 'who')).toEqual({
+      platform: 'telegram',
+      externalId: '123456789',
+    });
   });
 
   it('names the missing flag rather than failing vaguely', () => {
@@ -109,9 +113,30 @@ describe('validation', () => {
     );
   });
 
-  it('rejects a non-numeric Telegram id', () => {
-    for (const bad of ['@someone', '12a', '']) {
-      expect(() => requireTelegramId(parseArgv(['x', '--tg', bad]), 'tg')).toThrow(CliError);
+  it('requires an identity to name its platform', () => {
+    // A bare number is ambiguous: the same digits are a different person on a
+    // different front end, so it is refused rather than assumed to be Telegram.
+    for (const bad of ['123456789', '@someone', 'telegram:', 'nope:123', '']) {
+      expect(() => requireIdentity(parseArgv(['x', '--who', bad]), 'who')).toThrow(CliError);
+    }
+  });
+
+  it('accepts an id or a handle as a member reference', () => {
+    expect(requireMemberReference(parseArgv(['x', '--to', 'telegram:42']), 'to')).toEqual({
+      kind: 'identity',
+      platform: 'telegram',
+      externalId: '42',
+    });
+    expect(requireMemberReference(parseArgv(['x', '--to', 'telegram:@someone']), 'to')).toEqual({
+      kind: 'handle',
+      platform: 'telegram',
+      handle: 'someone',
+    });
+  });
+
+  it('rejects a member reference with no platform', () => {
+    for (const bad of ['42', '@someone', 'telegram:@', '']) {
+      expect(() => requireMemberReference(parseArgv(['x', '--to', bad]), 'to')).toThrow(CliError);
     }
   });
 });

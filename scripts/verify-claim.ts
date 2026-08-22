@@ -141,13 +141,13 @@ function report(label: string, ok: boolean, detail = ''): void {
 
 const projectRow = await prisma.project.findUniqueOrThrow({
   where: { slug: SLUG },
-  select: { id: true, announceOnClaim: true, telegramGroupId: true },
+  select: { id: true, announceOnClaim: true, announceChannelId: true },
 });
 
 // Point announcements at a group that cannot receive them.
 await prisma.project.update({
   where: { id: projectRow.id },
-  data: { announceOnClaim: true, telegramGroupId: BigInt(-1) },
+  data: { announceOnClaim: true, announceChannelId: '-1' },
 });
 
 try {
@@ -163,7 +163,10 @@ try {
   await press('k', rollMessageId);
 
   const claim = await prisma.claim.findFirst({
-    where: { projectId: projectRow.id, member: { telegramUserId: BigInt(TELEGRAM_USER_ID) } },
+    where: {
+      projectId: projectRow.id,
+      member: { platform: 'telegram', externalId: String(TELEGRAM_USER_ID) },
+    },
     select: {
       id: true,
       editionNumber: true,
@@ -228,7 +231,7 @@ try {
     where: { id: projectRow.id },
     data: {
       announceOnClaim: projectRow.announceOnClaim,
-      telegramGroupId: projectRow.telegramGroupId,
+      announceChannelId: projectRow.announceChannelId,
     },
   });
   await prisma.$disconnect();

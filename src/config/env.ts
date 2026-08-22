@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
+import type { Platform } from '../generated/prisma/enums.js';
 
 /**
  * Startup environment validation.
@@ -45,7 +46,15 @@ export const envSchema = z.object({
    * Defaults to empty, which authorises nobody: an unset allowlist must mean
    * no one can award, never everyone.
    */
-  ADMIN_TELEGRAM_IDS: z
+  /**
+   * Who may issue an award, as "platform:id" entries — e.g.
+   * "telegram:8853090779,discord:4711".
+   *
+   * The platform is required rather than assumed: an operator's Telegram id
+   * and their Discord id are different numbers, and silently treating a bare
+   * number as Telegram would eventually authorise the wrong person.
+   */
+  ADMIN_IDS: z
     .string()
     .default('')
     .transform((raw) =>
@@ -54,8 +63,22 @@ export const envSchema = z.object({
         .map((part) => part.trim())
         .filter((part) => part.length > 0),
     )
-    .pipe(z.array(z.string().regex(/^\d{1,19}$/, 'must be a numeric Telegram user id')))
-    .transform((ids) => ids.map((id) => BigInt(id))),
+    .pipe(
+      z.array(
+        z
+          .string()
+          .regex(
+            /^(telegram|discord|web):[A-Za-z0-9_-]{1,64}$/,
+            'must be "platform:id", e.g. telegram:8853090779',
+          ),
+      ),
+    )
+    .transform((entries) =>
+      entries.map((entry) => {
+        const [platform, externalId] = entry.split(':');
+        return { platform: platform as Platform, externalId: externalId ?? '' };
+      }),
+    ),
 });
 
 export type Env = z.infer<typeof envSchema>;

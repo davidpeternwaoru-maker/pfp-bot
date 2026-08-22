@@ -63,8 +63,8 @@ export function fakePrisma(db: FakeDatabase): PrismaClient {
 
   const stub = {
     member: {
-      upsert: (args: { where: { telegramUserId: bigint } }) =>
-        Promise.resolve({ id: Number(args.where.telegramUserId) }),
+      upsert: (args: { where: { platform_externalId: { externalId: string } } }) =>
+        Promise.resolve({ id: Number(args.where.platform_externalId.externalId) }),
     },
     project: {
       findUnique: (args: { where: { slug?: string; id?: number } }) => {

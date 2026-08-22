@@ -2,8 +2,9 @@ import { awardCombination } from '../../../core/claim/award-service.js';
 import { fetchTraitPack } from '../../../core/db/trait-pack-repository.js';
 import type { PrismaClient } from '../../../generated/prisma/client.js';
 import type { Logger } from '../../../logging/logger.js';
-import { normaliseUsername } from '../../telegram/payload.js';
-import { optionalFlag, requireIdList, requireSlug, requireTelegramId } from '../args.js';
+import { findMemberByHandle, findMemberByIdentity } from '../../../core/db/member-repository.js';
+import { requireIdentity, requireIdList, requireMemberReference, requireSlug } from '../args.js';
+import type { PlatformIdentity } from '../args.js';
 import type { ParsedArgs } from '../args.js';
 import { confirmDestructive } from '../confirm.js';
 import { CliError } from '../errors.js';
@@ -12,40 +13,41 @@ import { keyValue } from '../format.js';
 /**
  * Hands a reserved combination to a member.
  *
- * Authorisation is an allowlist of Telegram user ids in ADMIN_TELEGRAM_IDS.
- * There is deliberately no password: a shared secret in an operator's shell
- * history is worse than a list of ids in the environment, and the ids are
- * already the identities the bot understands.
+ * Authorisation is an allowlist of platform-qualified ids in ADMIN_IDS, e.g.
+ * "telegram:8853090779". There is deliberately no password: a shared secret in
+ * an operator's shell history is worse than a list of ids in the environment,
+ * and these are already the identities the product understands.
  */
 export async function awardCommand(
   prisma: PrismaClient,
   args: ParsedArgs,
   write: (text: string) => void,
   context: {
-    readonly adminIds: readonly bigint[];
+    readonly adminIds: readonly PlatformIdentity[];
     readonly traitRoot: string;
     readonly claimRoot: string;
     readonly logger: Logger;
   },
 ): Promise<number> {
-  const issuer = requireTelegramId(args, 'issuer');
+  const issuer = requireIdentity(args, 'issuer');
   const slug = requireSlug(args, 'project');
   const traitIds = requireIdList(args, 'traits');
+  const to = requireMemberReference(args, 'to');
 
-  const toRaw = optionalFlag(args, 'to');
-  if (toRaw === undefined) {
-    throw new CliError('missing --to (a numeric Telegram user id, or @username)');
-  }
+  const issuerLabel = `${issuer.platform}:${issuer.externalId}`;
 
   // Fail closed, and before anything is read from the database.
   if (context.adminIds.length === 0) {
-    throw new CliError(
-      'ADMIN_TELEGRAM_IDS is empty, so nobody is authorised to award. Set it and retry.',
-    );
+    throw new CliError('ADMIN_IDS is empty, so nobody is authorised to award. Set it and retry.');
   }
-  if (!context.adminIds.includes(issuer)) {
-    context.logger.warn('award.refused', { issuer: String(issuer), project: slug });
-    throw new CliError(`Telegram id ${String(issuer)} is not in ADMIN_TELEGRAM_IDS`);
+  // Both halves must match: an id that is an admin on one platform is somebody
+  // else entirely on another.
+  const authorised = context.adminIds.some(
+    (admin) => admin.platform === issuer.platform && admin.externalId === issuer.externalId,
+  );
+  if (!authorised) {
+    context.logger.warn('award.refused', { issuer: issuerLabel, project: slug });
+    throw new CliError(`${issuerLabel} is not in ADMIN_IDS`);
   }
 
   const project = await prisma.project.findUnique({
@@ -56,21 +58,25 @@ export async function awardCommand(
     throw new CliError(`no project with slug "${slug}"`);
   }
 
-  const recipient = toRaw.startsWith('@')
-    ? await prisma.member.findFirst({
-        where: { username: normaliseUsername(toRaw.slice(1)) },
-        select: { id: true, telegramUserId: true, username: true },
-      })
-    : await prisma.member.findUnique({
-        where: { telegramUserId: BigInt(/^\d{1,19}$/.test(toRaw) ? toRaw : '0') },
-        select: { id: true, telegramUserId: true, username: true },
-      });
+  const recipient =
+    to.kind === 'handle'
+      ? await findMemberByHandle(prisma, to.platform, to.handle)
+      : await findMemberByIdentity(prisma, to.platform, to.externalId).then((found) =>
+          found === null ? null : { ...found, externalId: to.externalId, handle: null },
+        );
 
   if (recipient === null) {
+    const shown =
+      to.kind === 'handle' ? `${to.platform}:@${to.handle}` : `${to.platform}:${to.externalId}`;
     throw new CliError(
-      `no member matches "${toRaw}". They must have opened the bot at least once first.`,
+      `no member matches "${shown}". They must have used the bot at least once first.`,
     );
   }
+
+  const recipientLabel =
+    recipient.handle === null
+      ? `${to.platform}:${recipient.externalId}`
+      : `${to.platform}:@${recipient.handle}`;
 
   const pack = await fetchTraitPack(prisma, project.id);
   const byId = new Map(
@@ -88,7 +94,7 @@ export async function awardCommand(
   await confirmDestructive({
     summary:
       `This will permanently award a claim in ${project.name} to ` +
-      `${recipient.username === null ? String(recipient.telegramUserId) : `@${recipient.username}`}:\n` +
+      `${recipientLabel}:\n` +
       traits.map((trait) => `  ${trait.slot}: ${trait.name} (${trait.tier})`).join('\n') +
       '\nAwards cannot be undone from this tool.',
     expect: slug,
@@ -104,15 +110,12 @@ export async function awardCommand(
     claimRoot: context.claimRoot,
   });
 
-  const recipientLabel =
-    recipient.username === null ? String(recipient.telegramUserId) : `@${recipient.username}`;
-
   switch (outcome.kind) {
     case 'awarded':
       // Logged with both parties, because an award is a privileged action and
       // the log is the only record of who authorised it.
       context.logger.info('award.issued', {
-        issuer: String(issuer),
+        issuer: issuerLabel,
         recipientMemberId: recipient.id,
         projectId: project.id,
         editionNumber: outcome.editionNumber,
@@ -121,7 +124,7 @@ export async function awardCommand(
         `${keyValue([
           ['awarded', `edition #${String(outcome.editionNumber)} of ${project.name}`],
           ['to', recipientLabel],
-          ['issued by', String(issuer)],
+          ['issued by', issuerLabel],
           ['artwork', outcome.imagePath],
         ])}\n`,
       );

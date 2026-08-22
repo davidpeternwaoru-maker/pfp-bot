@@ -29,7 +29,7 @@ const WITH_DEFAULTS = {
   TRAIT_ROOT: 'trait-packs',
   CLAIM_ROOT: 'output/claims',
   // Empty authorises nobody, which is the safe default for an allowlist.
-  ADMIN_TELEGRAM_IDS: [],
+  ADMIN_IDS: [],
 } as const;
 
 describe('parseEnv', () => {
@@ -110,33 +110,35 @@ describe('TRAIT_ROOT', () => {
   });
 });
 
-describe('ADMIN_TELEGRAM_IDS', () => {
+describe('ADMIN_IDS', () => {
   it('authorises nobody when unset, rather than everybody', () => {
-    expect(parseEnv({ ...VALID }).ADMIN_TELEGRAM_IDS).toEqual([]);
+    expect(parseEnv({ ...VALID }).ADMIN_IDS).toEqual([]);
   });
 
-  it('parses a comma-separated list into ids', () => {
-    expect(parseEnv({ ...VALID, ADMIN_TELEGRAM_IDS: '123,456' }).ADMIN_TELEGRAM_IDS).toEqual([
-      123n,
-      456n,
+  it('parses a comma-separated list of platform-qualified ids', () => {
+    expect(parseEnv({ ...VALID, ADMIN_IDS: 'telegram:123,discord:456' }).ADMIN_IDS).toEqual([
+      { platform: 'telegram', externalId: '123' },
+      { platform: 'discord', externalId: '456' },
     ]);
   });
 
   it('tolerates spacing and trailing separators', () => {
-    expect(parseEnv({ ...VALID, ADMIN_TELEGRAM_IDS: ' 123 , 456 , ' }).ADMIN_TELEGRAM_IDS).toEqual([
-      123n,
-      456n,
+    expect(parseEnv({ ...VALID, ADMIN_IDS: ' telegram:123 , telegram:456 , ' }).ADMIN_IDS).toEqual([
+      { platform: 'telegram', externalId: '123' },
+      { platform: 'telegram', externalId: '456' },
     ]);
+  });
+
+  it('refuses a bare id with no platform', () => {
+    // The same digits belong to different people on different front ends.
+    expect(problemsOf({ ...VALID, ADMIN_IDS: '123' }).join()).toContain('ADMIN_IDS');
+    expect(problemsOf({ ...VALID, ADMIN_IDS: 'nope:123' }).join()).toContain('ADMIN_IDS');
   });
 
   it('refuses to start on a malformed id rather than dropping it', () => {
     // Silently ignoring a typo would shrink the allowlist without anyone
     // noticing, which for an authorisation list is the wrong way to fail.
-    expect(problemsOf({ ...VALID, ADMIN_TELEGRAM_IDS: '123,not-an-id' }).join()).toContain(
-      'ADMIN_TELEGRAM_IDS',
-    );
-    expect(problemsOf({ ...VALID, ADMIN_TELEGRAM_IDS: '@someone' }).join()).toContain(
-      'ADMIN_TELEGRAM_IDS',
-    );
+    expect(problemsOf({ ...VALID, ADMIN_IDS: '123,not-an-id' }).join()).toContain('ADMIN_IDS');
+    expect(problemsOf({ ...VALID, ADMIN_IDS: '@someone' }).join()).toContain('ADMIN_IDS');
   });
 });

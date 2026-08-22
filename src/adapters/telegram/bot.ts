@@ -2,6 +2,7 @@ import { Bot, GrammyError, HttpError, InputFile } from 'grammy';
 import type { Context } from 'grammy';
 import type { UserFromGetMe } from 'grammy/types';
 import { resolveMember } from '../../core/db/member-repository.js';
+import type { MemberIdentity } from '../../core/db/member-repository.js';
 import {
   findAnnounceSettings,
   findClaimForMember,
@@ -55,6 +56,15 @@ import {
 } from '../../core/services/roll-service.js';
 import type { RollDependencies } from '../../core/services/roll-service.js';
 import type { RollSessionStore } from '../../core/session.js';
+
+/** Telegram's identity for a sender, in the shape core understands. */
+function telegramIdentity(from: { id: number; username?: string | undefined }): MemberIdentity {
+  return {
+    platform: 'telegram',
+    externalId: String(from.id),
+    handle: normaliseUsername(from.username),
+  };
+}
 
 export interface BotDependencies {
   readonly token: string;
@@ -131,7 +141,7 @@ export function createBot(deps: BotDependencies): Bot {
 
     // The member row is created even for a bad link: knowing someone arrived is
     // useful, and it costs one upsert. The payload itself is never stored.
-    const member = await resolveMember(prisma, BigInt(from.id), normaliseUsername(from.username));
+    const member = await resolveMember(prisma, telegramIdentity(from));
 
     const log = logger.child({ memberId: member.id });
 
@@ -188,7 +198,7 @@ export function createBot(deps: BotDependencies): Bot {
       return;
     }
 
-    const member = await resolveMember(prisma, BigInt(from.id), normaliseUsername(from.username));
+    const member = await resolveMember(prisma, telegramIdentity(from));
     const log = logger.child({ memberId: member.id });
 
     const argument = ctx.match.trim();
@@ -263,7 +273,7 @@ export function createBot(deps: BotDependencies): Bot {
       return;
     }
 
-    const member = await resolveMember(prisma, BigInt(from.id), normaliseUsername(from.username));
+    const member = await resolveMember(prisma, telegramIdentity(from));
     const entries = await findCollection(prisma, member.id);
     const page = collectionPage(entries, 0);
     const keyboard = collectionKeyboard(page);
@@ -286,7 +296,7 @@ export function createBot(deps: BotDependencies): Bot {
       return;
     }
 
-    const member = await resolveMember(prisma, BigInt(from.id), normaliseUsername(from.username));
+    const member = await resolveMember(prisma, telegramIdentity(from));
     const log = logger.child({ memberId: member.id });
 
     // Collection paging belongs to a message with no roll behind it, so it is
@@ -407,11 +417,11 @@ export function createBot(deps: BotDependencies): Bot {
                 result.traits,
               );
 
-              if (settings.announceOnClaim && settings.telegramGroupId !== null) {
+              if (settings.announceOnClaim && settings.announceChannelId !== null) {
                 await announceClaim(
                   ctx.api,
                   logger,
-                  settings.telegramGroupId,
+                  settings.announceChannelId,
                   settings.name,
                   result.claim.editionNumber,
                   result.traits,

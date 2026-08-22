@@ -197,15 +197,16 @@ export async function exportHoldersCommand(
       contentHash: true,
       claimedAt: true,
       imagePath: true,
-      member: { select: { telegramUserId: true, username: true } },
+      member: { select: { platform: true, externalId: true, handle: true } },
     },
   });
 
   const lines = [
     csvRow([
       'edition',
-      'telegram_user_id',
-      'username',
+      'platform',
+      'external_id',
+      'handle',
       'tier',
       'claimed_at',
       'combination_hash',
@@ -215,8 +216,9 @@ export async function exportHoldersCommand(
     ...claims.map((claim) =>
       csvRow([
         String(claim.editionNumber),
-        String(claim.member.telegramUserId),
-        claim.member.username ?? '',
+        claim.member.platform,
+        claim.member.externalId,
+        claim.member.handle ?? '',
         claim.tier,
         claim.claimedAt.toISOString(),
         claim.combinationHash,

@@ -93,7 +93,7 @@ const base = BigInt(Date.now()) * 1000n;
 const memberIds: number[] = [];
 for (let i = 0; i < N; i += 1) {
   const m = await prisma.member.create({
-    data: { telegramUserId: base + BigInt(i) },
+    data: { platform: 'telegram', externalId: String(base + BigInt(i)) },
     select: { id: true },
   });
   memberIds.push(m.id);

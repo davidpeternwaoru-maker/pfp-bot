@@ -125,7 +125,7 @@ describe.skipIf(DATABASE_URL === undefined)('concurrent claiming', () => {
     memberIds = [];
     for (let i = 0; i < CLAIMANTS; i += 1) {
       const member = await prisma.member.create({
-        data: { telegramUserId: base + BigInt(i) },
+        data: { platform: 'telegram', externalId: String(base + BigInt(i)) },
         select: { id: true },
       });
       memberIds.push(member.id);

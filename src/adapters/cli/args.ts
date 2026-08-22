@@ -1,4 +1,5 @@
 import { MAX_SLUG_LENGTH, parseSlug } from '../../core/slug.js';
+import type { Platform } from '../../generated/prisma/enums.js';
 import { CliError } from './errors.js';
 
 /**
@@ -136,11 +137,55 @@ export function optionalDate(args: ParsedArgs, name: string): Date | undefined {
   return value;
 }
 
-/** Telegram user id, either bare or as @handle for the award target. */
-export function requireTelegramId(args: ParsedArgs, name: string): bigint {
+export interface PlatformIdentity {
+  readonly platform: Platform;
+  readonly externalId: string;
+}
+
+const IDENTITY_PATTERN = /^(telegram|discord|web):([A-Za-z0-9_-]{1,64})$/;
+
+/**
+ * A "platform:id" identity, e.g. telegram:8853090779.
+ *
+ * The platform is required rather than assumed. The same operator has
+ * different ids on different front ends, and treating a bare number as
+ * Telegram would eventually authorise or award to the wrong person.
+ */
+export function requireIdentity(args: ParsedArgs, name: string): PlatformIdentity {
   const raw = requireFlag(args, name);
-  if (!/^\d{1,19}$/.test(raw)) {
-    throw new CliError(`--${name} must be a numeric Telegram user id`);
+  const match = IDENTITY_PATTERN.exec(raw);
+  if (match === null) {
+    throw new CliError(`--${name} must be "platform:id", e.g. telegram:8853090779`);
   }
-  return BigInt(raw);
+  return { platform: match[1] as Platform, externalId: match[2] ?? '' };
+}
+
+/**
+ * Either a "platform:id" identity or a "platform:@handle" reference.
+ *
+ * Handles are not unique and change freely, so they are only ever a
+ * convenience for an operator typing a name — the id form is the reliable one.
+ */
+export type MemberReference =
+  | { readonly kind: 'identity'; readonly platform: Platform; readonly externalId: string }
+  | { readonly kind: 'handle'; readonly platform: Platform; readonly handle: string };
+
+const HANDLE_PATTERN = /^(telegram|discord|web):@([A-Za-z0-9_.-]{1,64})$/;
+
+export function requireMemberReference(args: ParsedArgs, name: string): MemberReference {
+  const raw = requireFlag(args, name);
+
+  const handle = HANDLE_PATTERN.exec(raw);
+  if (handle !== null) {
+    return { kind: 'handle', platform: handle[1] as Platform, handle: handle[2] ?? '' };
+  }
+
+  const identity = IDENTITY_PATTERN.exec(raw);
+  if (identity !== null) {
+    return { kind: 'identity', platform: identity[1] as Platform, externalId: identity[2] ?? '' };
+  }
+
+  throw new CliError(
+    `--${name} must be "platform:id" or "platform:@handle", e.g. telegram:8853090779 or telegram:@someone`,
+  );
 }

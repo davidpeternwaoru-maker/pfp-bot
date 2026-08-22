@@ -63,7 +63,8 @@ export async function findProjectById(
 export interface ClaimAnnounceSettings {
   readonly name: string;
   readonly announceOnClaim: boolean;
-  readonly telegramGroupId: bigint | null;
+  /** Opaque to core; only the announcing front end knows how to read it. */
+  readonly announceChannelId: string | null;
 }
 
 /** The announcement settings needed once a claim has succeeded. */
@@ -73,6 +74,6 @@ export async function findAnnounceSettings(
 ): Promise<ClaimAnnounceSettings | null> {
   return prisma.project.findUnique({
     where: { id: projectId },
-    select: { name: true, announceOnClaim: true, telegramGroupId: true },
+    select: { name: true, announceOnClaim: true, announceChannelId: true },
   });
 }

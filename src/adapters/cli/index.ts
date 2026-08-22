@@ -26,7 +26,8 @@ const USAGE = `pfp-bot admin
   capacity         --project <slug> --members <expected>
   open-claims      --project <slug> [--opens-at <iso>] [--closes-at <iso>] [--yes]
   close-claims     --project <slug> [--yes]
-  award            --issuer <telegram id> --project <slug> --to <@handle|id> --traits 1,2,3 [--yes]
+  award            --issuer <platform:id> --project <slug> --to <platform:id|platform:@handle>
+                   --traits 1,2,3 [--yes]
   export-holders   --project <slug> [--out <file.csv>]
   stats            --project <slug>
 
@@ -71,7 +72,7 @@ async function main(): Promise<number> {
 
       case 'award':
         return await awardCommand(prisma, args, write, {
-          adminIds: env.ADMIN_TELEGRAM_IDS,
+          adminIds: env.ADMIN_IDS,
           traitRoot: env.TRAIT_ROOT,
           claimRoot: env.CLAIM_ROOT,
           logger,

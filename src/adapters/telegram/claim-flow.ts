@@ -96,15 +96,24 @@ export async function showClaimed(
 export async function announceClaim(
   api: Api,
   logger: Logger,
-  groupId: bigint,
+  /** Opaque to core; Telegram reads it as a numeric chat id. */
+  channelId: string,
   projectName: string,
   editionNumber: number,
   traits: readonly TraitRecord[],
   claimantUsername: string | null,
 ): Promise<void> {
+  const chatId = Number(channelId);
+  if (!Number.isFinite(chatId)) {
+    // Configured for a different front end, or mistyped. Not this adapter's
+    // announcement to make, and never a reason to disturb a settled claim.
+    logger.warn('announce.channel_not_telegram', { editionNumber });
+    return;
+  }
+
   try {
     await api.sendMessage(
-      Number(groupId),
+      chatId,
       announcementText(projectName, editionNumber, traits, claimantUsername),
     );
   } catch (error) {

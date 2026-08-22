@@ -70,7 +70,7 @@ describe('classifyClaimConflict', () => {
   });
 
   it('does not classify a unique violation on some other table as a claim conflict', () => {
-    const error = driverError('Member_telegramUserId_key', ['telegramUserId']);
+    const error = driverError('Member_platform_externalId_key', ['platform', 'externalId']);
     expect(classifyClaimConflict(error)).toBeNull();
   });
 

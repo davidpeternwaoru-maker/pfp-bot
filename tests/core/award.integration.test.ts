@@ -105,7 +105,11 @@ describe.skipIf(DATABASE_URL === undefined)('awarding a legendary', () => {
     memberIds = [];
     for (let i = 0; i < 3; i += 1) {
       const member = await prisma.member.create({
-        data: { telegramUserId: base + BigInt(i), username: `awardee_${String(i)}` },
+        data: {
+          platform: 'telegram',
+          externalId: String(base + BigInt(i)),
+          handle: `awardee_${String(i)}`,
+        },
         select: { id: true },
       });
       memberIds.push(member.id);

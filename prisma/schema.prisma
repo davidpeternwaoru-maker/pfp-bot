@@ -16,6 +16,15 @@ enum ProjectStatus {
   closed
 }
 
+/// Which front end an identity belongs to. Members are identified by their
+/// platform and that platform's own user id, so a Discord or web front end can
+/// be added without the schema having to pretend its users are Telegram users.
+enum Platform {
+  telegram
+  discord
+  web
+}
+
 enum TraitTier {
   open
   gated
@@ -24,22 +33,25 @@ enum TraitTier {
 
 /// A community running its own artwork pack and claim window.
 model Project {
-  id              Int           @id @default(autoincrement())
-  name            String
+  id                Int           @id @default(autoincrement())
+  name              String
   /// The deep link payload. Unique because it is the only thing resolving an
   /// inbound /start to a project, and it is attacker-supplied.
-  slug            String        @unique
-  mascotName      String
-  status          ProjectStatus @default(draft)
-  claimOpensAt    DateTime?
-  claimClosesAt   DateTime?
-  canvasWidth     Int
-  canvasHeight    Int
-  telegramGroupId BigInt?
-  announceOnClaim Boolean       @default(false)
-  eligibilityRule Json          @default("{}")
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  slug              String        @unique
+  mascotName        String
+  status            ProjectStatus @default(draft)
+  claimOpensAt      DateTime?
+  claimClosesAt     DateTime?
+  canvasWidth       Int
+  canvasHeight      Int
+  /// Where a claim is announced, as an opaque id the announcing front end
+  /// understands: a Telegram group id, a Discord channel id, a webhook key.
+  /// Text rather than a number because not every platform uses integers.
+  announceChannelId String?
+  announceOnClaim   Boolean       @default(false)
+  eligibilityRule   Json          @default("{}")
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 
   traits     Trait[]
   exclusions Exclusion[]
@@ -48,17 +60,17 @@ model Project {
 
 /// One artwork layer option, e.g. slot "eyes", name "visor".
 model Trait {
-  id          Int       @id @default(autoincrement())
-  projectId   Int
-  slot        String
-  name        String
-  layerOrder  Int
-  imagePath   String
-  rarityWeight Int      @default(1)
-  tier        TraitTier @default(open)
-  createdAt   DateTime  @default(now())
+  id           Int       @id @default(autoincrement())
+  projectId    Int
+  slot         String
+  name         String
+  layerOrder   Int
+  imagePath    String
+  rarityWeight Int       @default(1)
+  tier         TraitTier @default(open)
+  createdAt    DateTime  @default(now())
 
-  project           Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project            Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
   exclusionsAsTraitA Exclusion[] @relation("ExclusionTraitA")
   exclusionsAsTraitB Exclusion[] @relation("ExclusionTraitB")
 
@@ -84,14 +96,24 @@ model Exclusion {
 
 /// A Telegram user. Only the identifiers needed to route a claim are stored.
 model Member {
-  id             Int      @id @default(autoincrement())
-  telegramUserId BigInt   @unique
-  username       String?
-  firstSeenAt    DateTime @default(now())
+  id            Int      @id @default(autoincrement())
+  platform      Platform
+  /// The platform's own id for this person, kept as text: Telegram and Discord
+  /// both use 64-bit integers, but a web identity is just as likely to be a
+  /// UUID, and text is the only shape that holds all of them without loss.
+  externalId    String
+  /// Display handle on that platform. A convenience only — it changes freely.
+  handle        String?
+  firstSeenAt   DateTime @default(now())
   /// Reserved for a later on-chain phase. Unused, never written to for now.
-  walletAddress  String?
+  walletAddress String?
 
   claims Claim[]
+
+  // One row per identity per platform. The same person arriving through two
+  // front ends is two members until something deliberately links them, which
+  // is the honest default: nothing here can prove they are the same person.
+  @@unique([platform, externalId])
 }
 
 /// A permanently locked combination held by one member.
@@ -102,20 +124,20 @@ model Claim {
 
   /// Stored as an array rather than a join table: a claimed combination is
   /// immutable and is hashed as a single unit, so it has no independent rows.
-  traitIds        Int[]
-  combinationHash String
-  editionNumber   Int
-  tier            TraitTier @default(open)
-  imagePath       String
-  contentHash     String
+  traitIds          Int[]
+  combinationHash   String
+  editionNumber     Int
+  tier              TraitTier @default(open)
+  imagePath         String
+  contentHash       String
   /// Equals memberId for open claims and null for awards, which is what makes
   /// the unique index below apply to open claims only: Postgres treats nulls
   /// as distinct, so a member may hold any number of awarded claims but only
   /// one open one. Set in exactly one place, insertClaim.
   openClaimMemberId Int?
   /// Reserved for a later on-chain phase. Unused, never written to for now.
-  mintAddress     String?
-  claimedAt       DateTime  @default(now())
+  mintAddress       String?
+  claimedAt         DateTime  @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
   member  Member  @relation(fields: [memberId], references: [id], onDelete: Cascade)
@@ -123,7 +145,6 @@ model Claim {
   // Without this, two members can hold the identical artwork. The product's
   // entire premise — that your PFP is yours alone — dies at the first duplicate.
   @@unique([projectId, combinationHash])
-
   // One OPEN claim per member per project. Without it, one member can claim
   // repeatedly and drain the open pool, making "one per member" a promise the
   // code cannot keep.
@@ -135,11 +156,9 @@ model Claim {
   // migration SQL, and `prisma migrate dev` regenerates migrations and
   // discards it — leaving no enforcement at all, silently.
   @@unique([projectId, openClaimMemberId])
-  @@index([projectId, memberId])
-
   // Without this, concurrent claims can be assigned the same edition number,
   // so "#7 of 500" stops identifying anything.
   @@unique([projectId, editionNumber])
-
+  @@index([projectId, memberId])
   @@index([memberId])
 }
