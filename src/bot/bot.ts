@@ -1,5 +1,6 @@
 import { Bot, GrammyError, HttpError } from 'grammy';
 import type { Context } from 'grammy';
+import type { UserFromGetMe } from 'grammy/types';
 import { resolveMember } from '../db/member-repository.js';
 import { findClaimForMember, findProjectBySlug } from '../db/project-repository.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
@@ -16,11 +17,17 @@ export interface BotDependencies {
   readonly sessions: SessionStore;
   readonly rateLimiter: RateLimiter;
   readonly logger: Logger;
+  /**
+   * Supplying the bot's own identity skips the getMe call grammY would
+   * otherwise make on start, which is what lets the handlers be driven with
+   * synthetic updates in a test with no network.
+   */
+  readonly botInfo?: UserFromGetMe;
 }
 
 export function createBot(deps: BotDependencies): Bot {
   const { prisma, sessions, rateLimiter, logger } = deps;
-  const bot = new Bot(deps.token);
+  const bot = new Bot(deps.token, deps.botInfo === undefined ? {} : { botInfo: deps.botInfo });
 
   // Rate limiting sits in front of every handler rather than on the expensive
   // ones individually, so a handler added in a later phase is covered without
