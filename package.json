@@ -26,7 +26,9 @@
     "verify:roll": "tsx scripts/verify-roll.ts",
     "verify:claim": "tsx scripts/verify-claim.ts",
     "bench:claims": "tsx scripts/bench-claims.ts",
-    "admin": "tsx src/cli/index.ts"
+    "admin": "tsx src/cli/index.ts",
+    "test:core": "vitest run --project core",
+    "test:adapters": "vitest run --project adapters"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.9.1",

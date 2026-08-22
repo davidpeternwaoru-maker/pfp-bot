@@ -11,7 +11,7 @@
 import { cp, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { loadEnv } from '../src/config/env.js';
-import { createPrismaClient } from '../src/db/client.js';
+import { createPrismaClient } from '../src/core/db/client.js';
 
 const SLOT_DIR = /^(\d+)-(.+)$/;
 

@@ -2,7 +2,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import type { TraitRecord, TraitTier } from '../../src/render/types.js';
+import type { TraitRecord, TraitTier } from '../../src/core/render/types.js';
 
 /** Deterministic PRNG (mulberry32) so distribution tests can never flake. */
 export function seededRandom(seed: number): () => number {

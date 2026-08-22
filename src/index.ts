@@ -1,10 +1,10 @@
-import { createBot } from './bot/bot.js';
-import { createRateLimiter } from './bot/rate-limit.js';
-import { createInMemorySessionStore } from './bot/session.js';
-import { createRenderCache } from './render/cache.js';
+import { createBot } from './adapters/telegram/bot.js';
+import { createRateLimiter } from './core/rate-limit.js';
+import { createInMemorySessionStore } from './core/session.js';
+import { createRenderCache } from './core/render/cache.js';
 import type { Env } from './config/env.js';
 import { EnvValidationError, loadEnv } from './config/env.js';
-import { createPrismaClient } from './db/client.js';
+import { createPrismaClient } from './core/db/client.js';
 import { createLogger } from './logging/logger.js';
 import { createShutdown } from './shutdown.js';
 

@@ -6,7 +6,7 @@
  *   npm run seed:test
  */
 import { loadEnv } from '../src/config/env.js';
-import { createPrismaClient } from '../src/db/client.js';
+import { createPrismaClient } from '../src/core/db/client.js';
 import type { ProjectStatus } from '../src/generated/prisma/enums.js';
 
 interface Seed {

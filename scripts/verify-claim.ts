@@ -11,12 +11,12 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Update } from 'grammy/types';
-import { createBot } from '../src/bot/bot.js';
-import { createRateLimiter } from '../src/bot/rate-limit.js';
-import { createInMemorySessionStore } from '../src/bot/session.js';
+import { createBot } from '../src/adapters/telegram/bot.js';
+import { createRateLimiter } from '../src/core/rate-limit.js';
+import { createInMemorySessionStore } from '../src/core/session.js';
 import { loadEnv } from '../src/config/env.js';
-import { createPrismaClient } from '../src/db/client.js';
-import { createRenderCache } from '../src/render/cache.js';
+import { createPrismaClient } from '../src/core/db/client.js';
+import { createRenderCache } from '../src/core/render/cache.js';
 import { createLogger } from '../src/logging/logger.js';
 
 const SLUG = 'test-live';

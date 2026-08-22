@@ -21,5 +21,35 @@ export default tseslint.config(
       '@typescript-eslint/consistent-type-imports': 'error',
     },
   },
+  {
+    // The layering rule, enforced rather than trusted. Core is the product:
+    // rendering, rarity, exclusions, claim rules, database access. It must
+    // stay usable by a web or Discord front end, which means it cannot know
+    // that Telegram exists. Deleting src/adapters must leave core compiling.
+    files: ['src/core/**/*.ts', 'tests/core/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['grammy', 'grammy/*'],
+              message: 'core must not import grammY. Telegram belongs in src/adapters/telegram.',
+            },
+            {
+              group: ['**/adapters/**'],
+              message:
+                'core must not depend on a front end. Move the shared part into core instead.',
+            },
+            {
+              group: ['**/config/env.js', '**/config/env'],
+              message:
+                'core takes its inputs as arguments. Read env at the composition root and pass values in.',
+            },
+          ],
+        },
+      ],
+    },
+  },
   prettier,
 );

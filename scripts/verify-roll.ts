@@ -8,19 +8,21 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Update } from 'grammy/types';
-import { createBot } from '../src/bot/bot.js';
-import { createRateLimiter } from '../src/bot/rate-limit.js';
-import { createInMemorySessionStore } from '../src/bot/session.js';
+import { createBot } from '../src/adapters/telegram/bot.js';
+import { createRateLimiter } from '../src/core/rate-limit.js';
+import { createInMemorySessionStore } from '../src/core/session.js';
+import { createInMemoryMessageBindings } from '../src/adapters/telegram/message-binding.js';
 import { loadEnv } from '../src/config/env.js';
-import { createPrismaClient } from '../src/db/client.js';
-import { createRenderCache } from '../src/render/cache.js';
+import { createPrismaClient } from '../src/core/db/client.js';
+import { createRenderCache } from '../src/core/render/cache.js';
 import { createLogger } from '../src/logging/logger.js';
-import { fetchTraitPack } from '../src/db/trait-pack-repository.js';
-import { drawUnclaimed } from '../src/roll/pool.js';
+import { fetchTraitPack } from '../src/core/db/trait-pack-repository.js';
+import { drawUnclaimed } from '../src/core/roll/pool.js';
 
 const env = loadEnv();
 const prisma = createPrismaClient(env.DATABASE_URL);
 const sessions = createInMemorySessionStore();
+const bindings = createInMemoryMessageBindings();
 const renderCache = createRenderCache();
 
 const calls: { method: string; caption?: string }[] = [];
@@ -31,6 +33,7 @@ const bot = createBot({
   token: env.TELEGRAM_BOT_TOKEN,
   prisma,
   sessions,
+  bindings,
   rateLimiter: createRateLimiter({ limit: 1000, windowMs: 60_000 }),
   renderCache,
   traitRoot: env.TRAIT_ROOT,
@@ -132,9 +135,13 @@ async function press(data: string, messageId: number): Promise<void> {
 
 await send('/start test-live');
 
-const session = await sessions.get(USER_ID, 0);
-const anySession = session ?? (await sessions.findByMessage(USER_ID, 5001));
-const messageId = anySession?.messageId ?? 5001;
+// The project id is not known up front, so it is read back the same way the
+// callback handler reads it: from the message the roll was bound to.
+const project = await prisma.project.findUniqueOrThrow({
+  where: { slug: 'test-live' },
+  select: { id: true },
+});
+const messageId = (await bindings.messageFor(USER_ID, project.id)) ?? 5001;
 
 // Twenty interactions: alternating rerolls and slot adjustments.
 for (let i = 0; i < 20; i += 1) {

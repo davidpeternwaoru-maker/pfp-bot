@@ -15,10 +15,10 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import sharp from 'sharp';
 import { loadEnv } from '../src/config/env.js';
-import { claimCombination } from '../src/claim/claim-service.js';
-import { createPrismaClient } from '../src/db/client.js';
-import { buildTraitPack } from '../src/render/pack.js';
-import type { TraitRecord } from '../src/render/types.js';
+import { claimCombination } from '../src/core/claim/claim-service.js';
+import { createPrismaClient } from '../src/core/db/client.js';
+import { buildTraitPack } from '../src/core/render/pack.js';
+import type { TraitRecord } from '../src/core/render/types.js';
 
 const env = loadEnv();
 const prisma = createPrismaClient(env.DATABASE_URL);

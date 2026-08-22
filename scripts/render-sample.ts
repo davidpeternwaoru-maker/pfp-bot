@@ -10,11 +10,11 @@
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import sharp from 'sharp';
-import { combinationHash, contentHash } from '../src/render/hash.js';
-import { buildTraitPack, openPoolCapacity } from '../src/render/pack.js';
-import { renderCombination } from '../src/render/image.js';
-import { selectOpenCombination } from '../src/render/select.js';
-import type { TraitRecord } from '../src/render/types.js';
+import { combinationHash, contentHash } from '../src/core/render/hash.js';
+import { buildTraitPack, openPoolCapacity } from '../src/core/render/pack.js';
+import { renderCombination } from '../src/core/render/image.js';
+import { selectOpenCombination } from '../src/core/render/select.js';
+import type { TraitRecord } from '../src/core/render/types.js';
 
 const SLOT_DIR = /^(\d+)-(.+)$/;
 
