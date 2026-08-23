@@ -1,26 +1,19 @@
-import { fetchTraitPack, openPoolCapacity, openTraits } from '../../../core/ports.js';
+import {
+  fetchTraitPack,
+  findStatsClaims,
+  openPoolCapacity,
+  openTraits,
+  projectStats,
+} from '../../../core/ports.js';
 import { writeFile } from 'node:fs/promises';
 import type { PrismaClient } from '../../../generated/prisma/client.js';
 import { optionalFlag, requireInt, requireSlug } from '../args.js';
 import type { ParsedArgs } from '../args.js';
 import { CliError } from '../errors.js';
 import { csvRow, isoMinute, keyValue, table } from '../format.js';
+import { requireProject } from '../lookup.js';
 
 /** Read-only commands: capacity, stats, and the holder export. */
-
-async function projectBySlug(
-  prisma: PrismaClient,
-  slug: string,
-): Promise<{ id: number; name: string }> {
-  const project = await prisma.project.findUnique({
-    where: { slug },
-    select: { id: true, name: true },
-  });
-  if (project === null) {
-    throw new CliError(`no project with slug "${slug}"`);
-  }
-  return project;
-}
 
 /**
  * Reports the size of the open pool against how many members are expected.
@@ -37,7 +30,7 @@ export async function capacityCommand(
   const slug = requireSlug(args, 'project');
   const expected = requireInt(args, 'members', { min: 1 });
 
-  const project = await projectBySlug(prisma, slug);
+  const project = await requireProject(prisma, slug);
   const pack = await fetchTraitPack(prisma, project.id);
   const capacity = openPoolCapacity(pack);
   const needed = expected * 10;
@@ -99,13 +92,9 @@ export async function statsCommand(
   const pack = await fetchTraitPack(prisma, project.id);
   const capacity = openPoolCapacity(pack);
 
-  const claims = await prisma.claim.findMany({
-    where: { projectId: project.id },
-    select: { traitIds: true, tier: true, editionNumber: true, claimedAt: true },
-  });
-
-  const open = claims.filter((claim) => claim.tier === 'open').length;
-  const awarded = claims.length - open;
+  // Counting lives in core, and so does the rule that commissions are left out
+  // of it. This command only decides how the numbers read.
+  const stats = projectStats(await findStatsClaims(prisma, project.id), pack);
 
   write(
     `${keyValue([
@@ -115,60 +104,40 @@ export async function statsCommand(
       ['closes', project.claimClosesAt === null ? '—' : isoMinute(project.claimClosesAt)],
       [
         'claims to date',
-        `${String(claims.length)} (${String(open)} rolled, ${String(awarded)} awarded)`,
+        `${String(stats.countedClaims)} (${String(stats.rolledClaims)} rolled, ` +
+          `${String(stats.awardedClaims)} awarded)`,
       ],
       ['open pool', `${String(capacity)} combinations`],
-      ['remaining', `${String(Math.max(0, capacity - open))} unclaimed`],
-      [
-        'latest claim',
-        claims.length === 0
-          ? '—'
-          : isoMinute(
-              claims.reduce(
-                (latest, claim) => (claim.claimedAt > latest ? claim.claimedAt : latest),
-                claims[0]?.claimedAt ?? new Date(0),
-              ),
-            ),
-      ],
+      ['remaining', `${String(Math.max(0, capacity - stats.rolledClaims))} unclaimed`],
+      ['latest claim', stats.latestClaimAt === null ? '—' : isoMinute(stats.latestClaimAt)],
+      // Shown apart from every figure above, because it is in none of them.
+      ['commissions', `${String(stats.customClaims)} (excluded from all figures above)`],
     ])}\n`,
   );
 
-  if (claims.length === 0) {
-    write('\nNo claims yet, so no trait rarity to report.\n');
+  // Keyed on the holdings rather than on the claim count: a project whose only
+  // claims are one-of-one pieces has claims but no traits to rank, and printing
+  // an empty table with headers reads as a bug rather than as an answer.
+  if (stats.traitHoldings.length === 0) {
+    write(
+      stats.countedClaims === 0
+        ? '\nNo claims yet, so no trait rarity to report.\n'
+        : '\nNo composited claims yet, so no trait rarity to report.\n',
+    );
     return 0;
   }
-
-  // How often each trait actually appears in a claim, which is not the same as
-  // its configured weight: exclusions and member choice both bend the outcome.
-  const held = new Map<number, number>();
-  for (const claim of claims) {
-    for (const id of claim.traitIds) {
-      held.set(id, (held.get(id) ?? 0) + 1);
-    }
-  }
-
-  const byId = new Map(
-    pack.slots.flatMap((slot) => slot.traits.map((trait) => [trait.id, trait] as const)),
-  );
-
-  const rarest = [...held.entries()]
-    .map(([id, count]) => ({ trait: byId.get(id), count }))
-    .filter(
-      (entry): entry is { trait: NonNullable<typeof entry.trait>; count: number } =>
-        entry.trait !== undefined,
-    )
-    .sort((a, b) => a.count - b.count || a.trait.id - b.trait.id)
-    .slice(0, 10);
 
   write(
     `\nRarest traits actually claimed\n${table(
       ['slot', 'trait', 'held', 'share'],
-      rarest.map((entry) => [
-        entry.trait.slot,
-        entry.trait.name,
-        String(entry.count),
-        `${((entry.count / claims.length) * 100).toFixed(1)}%`,
-      ]),
+      stats.traitHoldings
+        .slice(0, 10)
+        .map((holding) => [
+          holding.trait.slot,
+          holding.trait.name,
+          String(holding.count),
+          `${(holding.share * 100).toFixed(1)}%`,
+        ]),
       { numeric: [2, 3], indent: '  ' },
     )}\n`,
   );
@@ -184,7 +153,7 @@ export async function exportHoldersCommand(
   const slug = requireSlug(args, 'project');
   const outPath = optionalFlag(args, 'out');
 
-  const project = await projectBySlug(prisma, slug);
+  const project = await requireProject(prisma, slug);
 
   const claims = await prisma.claim.findMany({
     where: { projectId: project.id },
@@ -192,6 +161,8 @@ export async function exportHoldersCommand(
     select: {
       editionNumber: true,
       tier: true,
+      claimType: true,
+      transferable: true,
       combinationHash: true,
       contentHash: true,
       claimedAt: true,
@@ -200,13 +171,19 @@ export async function exportHoldersCommand(
     },
   });
 
+  // claim_type and transferable are carried here because this export is what a
+  // later airdrop or snapshot gets built from. A list that did not say which
+  // rows are non-transferable commissions is a list somebody eventually sends
+  // a transfer against.
   const lines = [
     csvRow([
       'edition',
       'platform',
       'external_id',
       'handle',
+      'claim_type',
       'tier',
+      'transferable',
       'claimed_at',
       'combination_hash',
       'content_hash',
@@ -218,7 +195,9 @@ export async function exportHoldersCommand(
         claim.member.platform,
         claim.member.externalId,
         claim.member.handle ?? '',
+        claim.claimType,
         claim.tier,
+        String(claim.transferable),
         claim.claimedAt.toISOString(),
         claim.combinationHash,
         claim.contentHash,

@@ -7,6 +7,7 @@ import type { TraitPack, TraitRecord } from '../render/types.js';
 import type { PrismaClient } from '../../generated/prisma/client.js';
 import { classifyClaimConflict } from './conflict.js';
 import { insertClaim } from './insert.js';
+import { memberSlotKey } from './types.js';
 
 /**
  * Claiming: the one operation in the product that must never be wrong.
@@ -104,7 +105,7 @@ export async function claimCombination(request: ClaimRequest): Promise<ClaimOutc
       contentHash: imageDigest,
       imagePath: relativePath,
       tier: 'open',
-      asOpenClaim: true,
+      kind: 'rolled',
     });
 
     if (inserted.kind === 'project-closed') {
@@ -134,7 +135,10 @@ export async function claimCombination(request: ClaimRequest): Promise<ClaimOutc
       const existing = await prisma.claim.findUnique({
         // Read through the same index that refused the write.
         where: {
-          projectId_openClaimMemberId: { projectId: pack.projectId, openClaimMemberId: memberId },
+          projectId_memberSlotKey: {
+            projectId: pack.projectId,
+            memberSlotKey: memberSlotKey(memberId, 'open'),
+          },
         },
         select: { editionNumber: true },
       });

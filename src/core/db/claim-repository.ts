@@ -1,4 +1,5 @@
 import type { PrismaClient } from '../../generated/prisma/client.js';
+import type { StatsClaim } from '../stats.js';
 import type { TraitTier } from '../render/types.js';
 
 /**
@@ -12,13 +13,19 @@ import type { TraitTier } from '../render/types.js';
  * This is a scan of one project's claims. At pilot scale that is a few hundred
  * short rows; if a drop ever gets large enough for it to matter, the fix is an
  * existence check per candidate hash rather than a cache.
+ *
+ * Restricted to open-type claims because only they have a trait combination to
+ * be taken. A bespoke or custom claim stores the hash of its own image bytes,
+ * which is a different kind of value in the same column and can never equal a
+ * combination hash — including them could only ever be noise in the set that
+ * decides what a member is allowed to roll.
  */
 export async function loadClaimedHashes(
   prisma: PrismaClient,
   projectId: number,
 ): Promise<ReadonlySet<string>> {
   const rows = await prisma.claim.findMany({
-    where: { projectId },
+    where: { projectId, claimType: 'open' },
     select: { combinationHash: true },
   });
 
@@ -104,4 +111,22 @@ export async function findCollection(
     tier: row.tier,
     claimedAt: row.claimedAt,
   }));
+}
+
+/**
+ * Everything the rarity report counts from, in one read.
+ *
+ * Custom claims are fetched rather than filtered out here on purpose: the
+ * exclusion rule belongs to projectStats, where it is pure and can be proved
+ * by running it twice. A repository that quietly dropped rows would make that
+ * rule untestable and invisible.
+ */
+export async function findStatsClaims(
+  prisma: PrismaClient,
+  projectId: number,
+): Promise<readonly StatsClaim[]> {
+  return prisma.claim.findMany({
+    where: { projectId },
+    select: { traitIds: true, claimType: true, tier: true, claimedAt: true },
+  });
 }

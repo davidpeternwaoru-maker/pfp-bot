@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { claimCombination } from '../../src/core/claim/claim-service.js';
 import type { ClaimOutcome } from '../../src/core/claim/claim-service.js';
+import { memberSlotKey } from '../../src/core/claim/types.js';
 import { createPrismaClient } from '../../src/core/db/client.js';
 import { buildTraitPack } from '../../src/core/render/pack.js';
 import type { TraitPack, TraitRecord } from '../../src/core/render/types.js';
@@ -266,7 +267,9 @@ describe.skipIf(DATABASE_URL === undefined)('concurrent claiming', () => {
     }
 
     const stored = await prisma.claim.findUniqueOrThrow({
-      where: { projectId_openClaimMemberId: { projectId, openClaimMemberId: memberId } },
+      where: {
+        projectId_memberSlotKey: { projectId, memberSlotKey: memberSlotKey(memberId, 'open') },
+      },
       select: { imagePath: true, contentHash: true, combinationHash: true, traitIds: true },
     });
 

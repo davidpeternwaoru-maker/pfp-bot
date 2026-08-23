@@ -9,6 +9,7 @@ import {
   createProjectCommand,
   importTraitsCommand,
 } from './commands/manage.js';
+import { issueOneOfOneCommand } from './commands/one-of-one.js';
 import { CliError } from './errors.js';
 
 /**
@@ -28,11 +29,19 @@ const USAGE = `pfp-bot admin
   close-claims     --project <slug> [--yes]
   award            --issuer <platform:id> --project <slug> --to <platform:id|platform:@handle>
                    --traits 1,2,3 [--yes]
+  issue-bespoke    --issuer <platform:id> --project <slug> --to <member> --file <path> [--yes]
+  issue-custom     --issuer <platform:id> --project <slug> --to <member> --file <path> [--yes]
   export-holders   --project <slug> [--out <file.csv>]
   stats            --project <slug>
 
 Trait pack layout: one directory per slot named "<layerOrder>-<slot>",
-containing "name.png", "name.tier.png" or "name.tier.weight.png".
+containing "name.png", "name.tier.png" or "name.tier.weight.png". Every slot
+also gets a "none" option automatically, so no slot is compulsory.
+
+award is for a reserved combination of traits. issue-bespoke and issue-custom
+are for a finished one-of-one image, given as --file relative to the trait
+root. A commission (issue-custom) is non-transferable and never appears in
+rarity statistics; a bespoke piece counts like any other claim.
 
 Commands that change what members can do ask for confirmation. Pass --yes
 only when scripting, and only when you already know what it will do.
@@ -77,6 +86,34 @@ async function main(): Promise<number> {
           claimRoot: env.CLAIM_ROOT,
           logger,
         });
+
+      case 'issue-bespoke':
+        return await issueOneOfOneCommand(
+          prisma,
+          args,
+          write,
+          {
+            adminIds: env.ADMIN_IDS,
+            traitRoot: env.TRAIT_ROOT,
+            claimRoot: env.CLAIM_ROOT,
+            logger,
+          },
+          'bespoke',
+        );
+
+      case 'issue-custom':
+        return await issueOneOfOneCommand(
+          prisma,
+          args,
+          write,
+          {
+            adminIds: env.ADMIN_IDS,
+            traitRoot: env.TRAIT_ROOT,
+            claimRoot: env.CLAIM_ROOT,
+            logger,
+          },
+          'custom',
+        );
 
       case 'export-holders':
         return await exportHoldersCommand(prisma, args, write);

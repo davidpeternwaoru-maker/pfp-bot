@@ -124,7 +124,10 @@ export async function awardCombination(request: AwardRequest): Promise<AwardOutc
       // The claim's tier is the highest reserved tier it contains, so a
       // collection listing can say what kind of thing it is.
       tier: traits.some((trait) => trait.tier === 'legendary') ? 'legendary' : 'gated',
-      asOpenClaim: false,
+      // Still an `open` claim type: it was composited from trait rows, so it
+      // belongs in trait supply counts. What makes it an award is that it
+      // occupies no member slot, which is what `awarded` encodes.
+      kind: 'awarded',
     });
 
     if (inserted.kind === 'project-closed') {

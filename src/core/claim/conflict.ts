@@ -2,10 +2,10 @@
  * Works out which unique constraint a failed claim hit.
  *
  * The three constraints mean three completely different things to a member —
- * somebody beat you to this artwork, you already hold one, or the edition
- * counter raced — so they must never be collapsed into one error. Anything
- * this cannot identify is returned as null and must be treated as unexpected,
- * never retried on the assumption it was a conflict.
+ * somebody beat you to this artwork, you already hold one of this kind, or the
+ * edition counter raced — so they must never be collapsed into one error.
+ * Anything this cannot identify is returned as null and must be treated as
+ * unexpected, never retried on the assumption it was a conflict.
  *
  * The shapes below were taken from the real driver rather than the docs:
  * Prisma 7's pg adapter does not populate `meta.target`, it nests the
@@ -126,7 +126,12 @@ export function classifyClaimConflict(error: unknown): ClaimConflict | null {
   if (mentions('editionNumber')) {
     return 'edition';
   }
-  if (mentions('memberId')) {
+  // The slot key, not memberId. The per-member index is built on
+  // memberSlotKey, and matching on 'memberId' stopped identifying it the
+  // moment that column was introduced — silently, because an unclassified
+  // conflict is rethrown rather than reported, so a member who already held a
+  // claim would have seen an internal error instead of their own artwork.
+  if (mentions('memberSlotKey')) {
     return 'member';
   }
 

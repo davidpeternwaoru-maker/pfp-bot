@@ -1,29 +1,70 @@
 import type { PrismaClient } from '../../generated/prisma/client.js';
 import type { TraitTier } from '../render/types.js';
+import { memberSlotKey } from './types.js';
+import type { ClaimType, MemberSlot } from './types.js';
 
 /**
  * The one place a Claim row is written.
  *
- * Both the open-pool path and the award path go through here so the edition
- * counter and the open-claim marker cannot drift apart between them. Conflicts
- * are not handled here: they are thrown so each caller can say what the
- * collision means to the person who caused it.
+ * Every path — a rolled claim, an award, a bespoke piece, a commission — comes
+ * through here so the edition counter, the claim type, the transferable flag
+ * and the member slot key cannot drift apart between them. Conflicts are not
+ * handled here: they are thrown so each caller can say what the collision
+ * means to the person who caused it.
  */
+
+/**
+ * What produced this claim.
+ *
+ * One field rather than four, because claim type, transferability, which
+ * member slot is consumed and whether the claim window applies are not
+ * independent choices — they are four consequences of one fact. Letting a
+ * caller set them separately is letting a caller set them inconsistently, and
+ * an inconsistent claim row is permanent.
+ */
+export type ClaimKind =
+  /** A member rolled it from the open pool. Consumes their open slot. */
+  | 'rolled'
+  /** An operator handed a member a reserved trait combination. */
+  | 'awarded'
+  /** An operator issued a one-of-one artwork the project paid for. */
+  | 'bespoke'
+  /** A member commissioned a one-of-one artwork. Consumes their custom slot. */
+  | 'custom';
+
+interface KindRules {
+  readonly claimType: ClaimType;
+  readonly transferable: boolean;
+  /** Which of the member's two per-project slots this occupies, if either. */
+  readonly slot: MemberSlot | null;
+}
+
+/**
+ * The whole taxonomy, as a table.
+ *
+ * Only `rolled` is subject to the claim window. The other three are deliberate
+ * acts with money or an operator behind them: an award after a drop closes is
+ * the normal case, and a commission the member has already paid for must be
+ * deliverable whenever the artwork is finished.
+ */
+const RULES: Record<ClaimKind, KindRules> = {
+  rolled: { claimType: 'open', transferable: true, slot: 'open' },
+  awarded: { claimType: 'open', transferable: true, slot: null },
+  bespoke: { claimType: 'bespoke', transferable: true, slot: null },
+  custom: { claimType: 'custom', transferable: false, slot: 'custom' },
+};
 
 export interface InsertClaimInput {
   readonly prisma: PrismaClient;
   readonly projectId: number;
   readonly memberId: number;
+  readonly kind: ClaimKind;
+  /** Empty for bespoke and custom: a one-of-one has no trait combination. */
   readonly traitIds: readonly number[];
   readonly combinationHash: string;
   readonly contentHash: string;
   readonly imagePath: string;
   readonly tier: TraitTier;
-  /**
-   * False for awards. An award is a deliberate act by an operator, so it is
-   * allowed alongside a member's open claim and outside the claim window.
-   */
-  readonly asOpenClaim: boolean;
 }
 
 export type InsertClaimResult =
@@ -40,7 +81,9 @@ const TRANSACTION_TIMEOUT_MS = 20_000;
 const TRANSACTION_MAX_WAIT_MS = 15_000;
 
 export async function insertClaim(input: InsertClaimInput): Promise<InsertClaimResult> {
-  const { prisma, projectId, memberId, asOpenClaim } = input;
+  const { prisma, projectId, memberId } = input;
+  const rules = RULES[input.kind];
+  const slotKey = rules.slot === null ? null : memberSlotKey(memberId, rules.slot);
 
   const created = await prisma.$transaction(
     async (tx) => {
@@ -61,9 +104,9 @@ export async function insertClaim(input: InsertClaimInput): Promise<InsertClaimR
         return null;
       }
 
-      // Fail closed for members. Awards skip this deliberately: an operator
-      // handing out a legendary after a drop closes is the normal case.
-      if (asOpenClaim) {
+      // Fail closed for members rolling the open pool. Nothing else is gated
+      // on the window; see RULES above for why.
+      if (input.kind === 'rolled') {
         if (project.status !== 'live') {
           return null;
         }
@@ -76,16 +119,17 @@ export async function insertClaim(input: InsertClaimInput): Promise<InsertClaimR
       // the counter is read inside the same round trip that uses it. Safe only
       // because of the lock above; without it, two of these would still read
       // the same MAX. The unique index remains the thing that guarantees it.
-      const openMarker = asOpenClaim ? memberId : null;
       const inserted = await tx.$queryRaw<{ id: number; editionNumber: number }[]>`
         INSERT INTO "Claim" (
           "projectId", "memberId", "traitIds", "combinationHash",
-          "editionNumber", "tier", "imagePath", "contentHash", "openClaimMemberId"
+          "editionNumber", "claimType", "tier", "transferable",
+          "imagePath", "contentHash", "memberSlotKey"
         )
         SELECT
           ${projectId}, ${memberId}, ${[...input.traitIds]}::int[], ${input.combinationHash},
-          COALESCE(MAX("editionNumber"), 0) + 1, ${input.tier}::"TraitTier",
-          ${input.imagePath}, ${input.contentHash}, ${openMarker}::int
+          COALESCE(MAX("editionNumber"), 0) + 1, ${rules.claimType}::"ClaimType",
+          ${input.tier}::"TraitTier", ${rules.transferable},
+          ${input.imagePath}, ${input.contentHash}, ${slotKey}::text
         FROM "Claim" WHERE "projectId" = ${projectId}
         RETURNING id, "editionNumber"
       `;

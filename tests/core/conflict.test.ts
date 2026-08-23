@@ -36,8 +36,8 @@ describe('classifyClaimConflict', () => {
     expect(classifyClaimConflict(error)).toBe('combination');
   });
 
-  it('identifies a member who already holds a claim', () => {
-    const error = driverError('Claim_projectId_memberId_key', ['projectId', 'memberId']);
+  it('identifies a member who already holds a claim in this slot', () => {
+    const error = driverError('Claim_projectId_memberSlotKey_key', ['projectId', 'memberSlotKey']);
     expect(classifyClaimConflict(error)).toBe('member');
   });
 
@@ -117,10 +117,10 @@ describe('classifyClaimConflict, raw query path', () => {
     ).toBe('combination');
   });
 
-  it('identifies the scoped one-open-claim index', () => {
+  it('identifies the scoped one-claim-per-slot index', () => {
     expect(
       classifyClaimConflict(
-        rawDriverError('Claim_projectId_openClaimMemberId_key', ['projectId', 'openClaimMemberId']),
+        rawDriverError('Claim_projectId_memberSlotKey_key', ['projectId', 'memberSlotKey']),
       ),
     ).toBe('member');
   });

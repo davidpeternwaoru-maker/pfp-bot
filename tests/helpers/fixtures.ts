@@ -2,6 +2,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
+import type { ProjectStats } from '../../src/core/stats.js';
 import type { TraitRecord, TraitTier } from '../../src/core/render/types.js';
 
 /** Deterministic PRNG (mulberry32) so distribution tests can never flake. */
@@ -88,4 +89,18 @@ export function trait(overrides: Partial<TraitRecord> & { slot: string }): Trait
     rarityWeight: overrides.rarityWeight ?? 1,
     tier,
   };
+}
+
+/**
+ * Every figure a project publishes: a ProjectStats minus the commission
+ * counter, which is reported to operators and counted in nothing.
+ *
+ * Built by removing one key rather than by listing the others, so a figure
+ * added to the report in a later phase is covered by the "commissions move
+ * nothing" tests on the day it is added, not whenever somebody remembers.
+ */
+export function publishedFigures(stats: ProjectStats): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...stats };
+  delete copy['customClaims'];
+  return copy;
 }

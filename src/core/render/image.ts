@@ -121,6 +121,30 @@ export async function compositeLayers(
 }
 
 /**
+ * A fully transparent canvas-sized PNG.
+ *
+ * This is the artwork behind every slot's "none" option, and the reason "none"
+ * needs no special case anywhere: compositing a transparent layer already
+ * produces exactly what a "skip this slot" branch would have to fake, in every
+ * consumer, forever.
+ *
+ * Same encoder settings as a render, so the file passes the identical
+ * validation a hand-made trait does and its bytes never drift.
+ */
+export async function transparentCanvas(canvas: CanvasSize): Promise<Buffer> {
+  return sharp({
+    create: {
+      width: canvas.width,
+      height: canvas.height,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  })
+    .png({ compressionLevel: 9, effort: 7 })
+    .toBuffer();
+}
+
+/**
  * Renders a combination to a PNG buffer.
  * Sorts by layerOrder rather than trusting the caller's ordering, because the
  * result is hashed and stored — a reordered input must not change the output.

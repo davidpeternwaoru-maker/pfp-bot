@@ -25,6 +25,24 @@ enum Platform {
   web
 }
 
+/// How a claim's artwork came to exist. Not a variation of one thing: the
+/// three have different economics, different ownership and different rules.
+///
+/// This records production, not selection. A hand-awarded legendary is still
+/// `open` because it was composited from trait rows — what makes it an award
+/// is its tier and its null memberSlotKey, not its artwork. The invariant that
+/// buys is exact: claimType is `open` if and only if traitIds is non-empty.
+enum ClaimType {
+  /// Composited from trait images. The open pool, and awards drawn from it.
+  open
+  /// A single pre-rendered artwork the project awards. Transferable, and it
+  /// counts toward rarity like any other claim.
+  bespoke
+  /// A single pre-rendered artwork commissioned by and personal to one member.
+  /// Never transferable, and never counted in rarity or supply.
+  custom
+}
+
 enum TraitTier {
   open
   gated
@@ -124,20 +142,31 @@ model Claim {
 
   /// Stored as an array rather than a join table: a claimed combination is
   /// immutable and is hashed as a single unit, so it has no independent rows.
-  traitIds          Int[]
-  combinationHash   String
-  editionNumber     Int
-  tier              TraitTier @default(open)
-  imagePath         String
-  contentHash       String
-  /// Equals memberId for open claims and null for awards, which is what makes
-  /// the unique index below apply to open claims only: Postgres treats nulls
-  /// as distinct, so a member may hold any number of awarded claims but only
-  /// one open one. Set in exactly one place, insertClaim.
-  openClaimMemberId Int?
+  /// Empty for bespoke and custom claims: a one-of-one artwork has no
+  /// combination, and inventing trait ids for it would put artwork in rarity
+  /// counts that was never composited from traits.
+  traitIds        Int[]
+  combinationHash String
+  editionNumber   Int
+  claimType       ClaimType @default(open)
+  tier            TraitTier @default(open)
+  /// False only for custom claims. The on-chain phase reads this to decide
+  /// mint parameters; nothing off-chain depends on it yet.
+  transferable    Boolean   @default(true)
+  imagePath       String
+  contentHash     String
+  /// "<memberId>:open" for a rolled claim, "<memberId>:custom" for a
+  /// commissioned one, and null for anything a project hands out.
+  ///
+  /// Null is what scopes the unique index below: Postgres treats nulls as
+  /// distinct, so a member may hold any number of awarded claims, but only one
+  /// rolled claim and only one commissioned claim per project. Encoding the
+  /// type into the key is what lets those two coexist rather than collide.
+  /// Set in exactly one place, insertClaim.
+  memberSlotKey   String?
   /// Reserved for a later on-chain phase. Unused, never written to for now.
-  mintAddress       String?
-  claimedAt         DateTime  @default(now())
+  mintAddress     String?
+  claimedAt       DateTime  @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
   member  Member  @relation(fields: [memberId], references: [id], onDelete: Cascade)
@@ -145,17 +174,15 @@ model Claim {
   // Without this, two members can hold the identical artwork. The product's
   // entire premise — that your PFP is yours alone — dies at the first duplicate.
   @@unique([projectId, combinationHash])
-  // One OPEN claim per member per project. Without it, one member can claim
-  // repeatedly and drain the open pool, making "one per member" a promise the
-  // code cannot keep.
+  // One rolled claim and one commissioned claim per member per project.
+  // Without it, one member can claim repeatedly and drain the open pool,
+  // making "one per member" a promise the code cannot keep.
   //
-  // Scoped to open claims because a hand-awarded legendary is meant to sit
-  // alongside a member's open claim rather than block it. That scoping is
-  // carried by openClaimMemberId above rather than by a partial index: a
-  // partial index is not expressible here, so it would live only in raw
-  // migration SQL, and `prisma migrate dev` regenerates migrations and
+  // The scoping is carried by memberSlotKey above rather than by a partial
+  // index: a partial index is not expressible here, so it would live only in
+  // raw migration SQL, and `prisma migrate dev` regenerates migrations and
   // discards it — leaving no enforcement at all, silently.
-  @@unique([projectId, openClaimMemberId])
+  @@unique([projectId, memberSlotKey])
   // Without this, concurrent claims can be assigned the same edition number,
   // so "#7 of 500" stops identifying anything.
   @@unique([projectId, editionNumber])

@@ -92,18 +92,21 @@ export function fakePrisma(db: FakeDatabase): PrismaClient {
       findMany: () => Promise.resolve(db.exclusions ?? []),
     },
     claim: {
-      // Reads through the scoped index, matching the real one-open-claim-per
-      // -member lookup rather than the blanket one it replaced.
+      // Reads through the scoped index, matching the real one-claim-per-slot
+      // lookup rather than the blanket one it replaced. The fixture is keyed
+      // by member, so the slot key is split back apart here.
       findUnique: (args: {
-        where: { projectId_openClaimMemberId: { projectId: number; openClaimMemberId: number } };
+        where: { projectId_memberSlotKey: { projectId: number; memberSlotKey: string } };
       }) => {
-        const { projectId, openClaimMemberId } = args.where.projectId_openClaimMemberId;
+        const { projectId, memberSlotKey } = args.where.projectId_memberSlotKey;
+        const memberId = memberSlotKey.split(':')[0] ?? '';
         return Promise.resolve(
-          db.claimsByProjectAndMember.get(`${String(projectId)}:${String(openClaimMemberId)}`) ??
-            null,
+          db.claimsByProjectAndMember.get(`${String(projectId)}:${memberId}`) ?? null,
         );
       },
-      findMany: (args: { where: { projectId?: number; memberId?: number } }) => {
+      findMany: (args: {
+        where: { projectId?: number; memberId?: number; claimType?: string };
+      }) => {
         // Two different callers land here: the claimed-hash scan for a
         // project, and the per-member lookups behind /mine and /collection.
         if (args.where.memberId !== undefined) {

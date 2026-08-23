@@ -1,4 +1,10 @@
-import { TraitImageError, loadTraitImage, resolveWithinRoot } from '../../../core/ports.js';
+import {
+  NONE_TRAIT_NAME,
+  TraitImageError,
+  ensureNoneImage,
+  loadTraitImage,
+  resolveWithinRoot,
+} from '../../../core/ports.js';
 import type { TraitTier } from '../../../core/ports.js';
 import { readdir, stat } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
@@ -8,6 +14,7 @@ import type { ParsedArgs } from '../args.js';
 import { confirmDestructive } from '../confirm.js';
 import { CliError } from '../errors.js';
 import { isoMinute, keyValue, table } from '../format.js';
+import { requireProject } from '../lookup.js';
 
 /** Commands that write: project creation, trait import, claim window. */
 
@@ -18,20 +25,6 @@ const SLOT_DIR = /^(\d+)-([a-z0-9-]+)$/;
 const TRAIT_FILE = /^([A-Za-z0-9_-]+?)(?:\.(open|gated|legendary))?(?:\.(\d+))?\.png$/;
 
 const MAX_CANVAS_PIXELS = 4096;
-
-async function requireProject(
-  prisma: PrismaClient,
-  slug: string,
-): Promise<{ id: number; name: string; canvasWidth: number; canvasHeight: number }> {
-  const project = await prisma.project.findUnique({
-    where: { slug },
-    select: { id: true, name: true, canvasWidth: true, canvasHeight: true },
-  });
-  if (project === null) {
-    throw new CliError(`no project with slug "${slug}"`);
-  }
-  return project;
-}
 
 export async function createProjectCommand(
   prisma: PrismaClient,
@@ -211,6 +204,36 @@ export async function importTraitsCommand(
 
   if (traits.length === 0) {
     throw new CliError(`no PNG traits found under ${dir}`);
+  }
+
+  // Every slot gets a "none" option, so a member can choose to have no hat, no
+  // chain, no mouth. Added here rather than asked of the operator because a
+  // pack that is missing one in a single slot is a pack where that slot is
+  // silently compulsory, and nobody would notice until a member asked why.
+  //
+  // It is an ordinary trait row pointing at a transparent layer. Nothing
+  // downstream knows it is special, which is why nothing downstream can get it
+  // wrong.
+  const noneImage = await ensureNoneImage(realRoot.path, canvas);
+  const layerOfSlot = new Map(traits.map((trait) => [trait.slot, trait.layerOrder] as const));
+
+  for (const [slot, layerOrder] of layerOfSlot) {
+    // An operator who shipped their own none.png keeps it: a second row would
+    // collide on (projectId, slot, name) and fail the whole import.
+    const supplied = traits.some((trait) => trait.slot === slot && trait.name === NONE_TRAIT_NAME);
+    if (supplied) {
+      continue;
+    }
+    traits.push({
+      slot,
+      layerOrder,
+      name: NONE_TRAIT_NAME,
+      // Open tier and weight 1: "none" is an ordinary option in the pool, as
+      // likely as any other, and reachable by rolling like any other.
+      tier: 'open',
+      rarityWeight: 1,
+      imagePath: noneImage,
+    });
   }
 
   const existing = await prisma.trait.count({ where: { projectId: project.id } });

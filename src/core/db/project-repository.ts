@@ -1,4 +1,5 @@
 import type { EntryExistingClaim, EntryProject } from '../entry.js';
+import { memberSlotKey } from '../claim/types.js';
 import type { PrismaClient } from '../../generated/prisma/client.js';
 
 /**
@@ -30,11 +31,13 @@ export async function findClaimForMember(
   memberId: number,
 ): Promise<EntryExistingClaim | null> {
   return prisma.claim.findUnique({
-    // Reads through the same unique index that enforces one OPEN claim per
-    // member, so this can never see more than one row. Scoped to open claims
-    // on purpose: an awarded legendary must not stop a member rolling the
-    // open pool, which they have not yet claimed from.
-    where: { projectId_openClaimMemberId: { projectId, openClaimMemberId: memberId } },
+    // Reads through the same unique index that enforces one rolled claim per
+    // member, so this can never see more than one row. Scoped to the open slot
+    // on purpose: neither an awarded legendary nor a commission should stop a
+    // member rolling the open pool, which they have not yet claimed from.
+    where: {
+      projectId_memberSlotKey: { projectId, memberSlotKey: memberSlotKey(memberId, 'open') },
+    },
     select: { editionNumber: true },
   });
 }

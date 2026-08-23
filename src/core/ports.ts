@@ -39,8 +39,12 @@ export {
   loadTraitImage,
   MAX_TRAIT_IMAGE_BYTES,
   renderCombination,
+  transparentCanvas,
 } from './render/image.js';
 export type { TraitImageOptions } from './render/image.js';
+
+/** The "none" option every slot carries. An importer has to create these. */
+export { ensureNoneImage, NONE_TRAIT_NAME, noneImagePath } from './render/none.js';
 
 export { createRenderCache, renderCacheKey } from './render/cache.js';
 export type { RenderCache, RenderCacheOptions } from './render/cache.js';
@@ -86,14 +90,29 @@ export type { ClaimedRecord, ClaimOutcome, ClaimRequest } from './claim/claim-se
 export { awardCombination } from './claim/award-service.js';
 export type { AwardOutcome, AwardRequest } from './claim/award-service.js';
 
+export { issueOneOfOne } from './claim/one-of-one-service.js';
+export type { OneOfOneKind, OneOfOneOutcome, OneOfOneRequest } from './claim/one-of-one-service.js';
+
+export { CLAIM_TYPES } from './claim/types.js';
+export type { ClaimType, MemberSlot } from './claim/types.js';
+
 export { loadClaimArtwork } from './claim/artwork.js';
 
 // ---------------------------------------------------------------------------
 // Reading what members hold
 // ---------------------------------------------------------------------------
 
-export { findCollection, findMemberClaims, loadClaimedHashes } from './db/claim-repository.js';
+export {
+  findCollection,
+  findMemberClaims,
+  findStatsClaims,
+  loadClaimedHashes,
+} from './db/claim-repository.js';
 export type { CollectionEntry, MemberClaim } from './db/claim-repository.js';
+
+/** Rarity and supply. Commissions are excluded inside, never by the caller. */
+export { projectStats } from './stats.js';
+export type { ProjectStats, StatsClaim, TraitHolding } from './stats.js';
 
 export { clampPage, collectionPage, COLLECTION_PAGE_SIZE, pageCountFor } from './collection.js';
 export type { CollectionPageView } from './collection.js';
