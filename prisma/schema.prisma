@@ -114,19 +114,31 @@ model Exclusion {
 
 /// A Telegram user. Only the identifiers needed to route a claim are stored.
 model Member {
-  id            Int      @id @default(autoincrement())
-  platform      Platform
+  id             Int       @id @default(autoincrement())
+  platform       Platform
   /// The platform's own id for this person, kept as text: Telegram and Discord
   /// both use 64-bit integers, but a web identity is just as likely to be a
   /// UUID, and text is the only shape that holds all of them without loss.
-  externalId    String
+  externalId     String
   /// Display handle on that platform. A convenience only — it changes freely.
-  handle        String?
-  firstSeenAt   DateTime @default(now())
-  /// Reserved for a later on-chain phase. Unused, never written to for now.
-  walletAddress String?
+  handle         String?
+  firstSeenAt    DateTime  @default(now())
+  /// The Solana address this member has proved they control, base58.
+  ///
+  /// Unique, and that constraint is the whole point: without it one holder
+  /// verifies once and passes the address round the community, and every
+  /// token gate in the product is open to everyone. Nullable because linking
+  /// is optional — Postgres treats nulls as distinct, so any number of members
+  /// may have none.
+  ///
+  /// Only ever written after a signature has been verified server-side. A
+  /// typed address proves nothing and must never reach this column.
+  walletAddress  String?   @unique
+  /// When the current address was proved. Cleared on unlink.
+  walletLinkedAt DateTime?
 
-  claims Claim[]
+  claims     Claim[]
+  challenges WalletChallenge[]
 
   // One row per identity per platform. The same person arriving through two
   // front ends is two members until something deliberately links them, which
@@ -188,4 +200,36 @@ model Claim {
   @@unique([projectId, editionNumber])
   @@index([projectId, memberId])
   @@index([memberId])
+}
+
+/// A one-time challenge a member signs to prove they control a wallet.
+///
+/// Rows are kept after use rather than deleted: `consumedAt` is what makes a
+/// replayed signature detectable, and a deleted row is indistinguishable from
+/// one that never existed.
+model WalletChallenge {
+  id       Int @id @default(autoincrement())
+  memberId Int
+
+  /// The opaque value that appears in the signing page URL.
+  ///
+  /// Separate from the nonce, and never the member id. A URL travels through
+  /// browser history, referrer headers and whatever is looking over a
+  /// shoulder; the member id would identify a person to anybody who saw it,
+  /// and would be guessable enough to try.
+  token String @unique
+  /// The value embedded in the message that gets signed.
+  nonce String
+
+  expiresAt  DateTime
+  /// Set exactly once, by a conditional update. See consumeChallenge.
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  // Rate limiting and the "how many has this member started" question.
+  @@index([memberId, createdAt])
+  // Expired rows are swept by age.
+  @@index([expiresAt])
 }
