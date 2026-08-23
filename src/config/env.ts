@@ -20,7 +20,7 @@ const TELEGRAM_BOT_TOKEN_PATTERN = /^\d{6,16}:[A-Za-z0-9_-]{30,}$/;
 
 export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 
-export const envSchema = z.object({
+const baseEnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']),
   // Not a secret, so a default is safe here — unlike DATABASE_URL or the bot
   // token, where falling back would mean running against the wrong thing.
@@ -54,6 +54,41 @@ export const envSchema = z.object({
    * and their Discord id are different numbers, and silently treating a bare
    * number as Telegram would eventually authorise the wrong person.
    */
+  /**
+   * Solana JSON-RPC endpoint, including any provider key it carries.
+   *
+   * One variable holding the whole URL rather than a provider name plus a key:
+   * changing provider is then a config change instead of a code change, and
+   * there is exactly one string to keep out of logs rather than two.
+   *
+   * https only. A provider key travels inside this URL, so plain http would
+   * put it on the wire in clear text for anyone on the path.
+   *
+   * Optional, and that is deliberate. Wallet linking gates token features and
+   * nothing else — ordinary claiming must work with no wallet and no RPC
+   * configured at all, so an unset endpoint disables those features rather
+   * than refusing to boot.
+   */
+  SOLANA_RPC_URL: z
+    .string()
+    .url()
+    .refine((value) => value.startsWith('https://'), 'must be https, never http')
+    .optional(),
+  /**
+   * Where members reach this process from a browser, e.g.
+   * https://pfp.example.com. Used to build the signing page link.
+   *
+   * https for the same reason every wallet adapter insists on it: a signing
+   * page served over http can be rewritten in transit, and what it would be
+   * rewritten to is a request to sign something else.
+   */
+  PUBLIC_BASE_URL: z
+    .string()
+    .url()
+    .refine((value) => value.startsWith('https://'), 'must be https, never http')
+    .optional(),
+  /** Port the signing page and health checks are served on. */
+  HTTP_PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
   ADMIN_IDS: z
     .string()
     .default('')
@@ -81,7 +116,38 @@ export const envSchema = z.object({
     ),
 });
 
+/**
+ * Wallet configuration is both halves or neither.
+ *
+ * An RPC endpoint with nowhere to host the signing page, or a signing page
+ * with nothing to verify balances against, is a half-built feature. Caught at
+ * startup, it is one line an operator fixes before anyone sees it; caught at
+ * run time, it is a member part-way through linking a wallet when the flow
+ * discovers it cannot finish.
+ */
+export const envSchema = baseEnvSchema.refine(
+  (env) => (env.SOLANA_RPC_URL === undefined) === (env.PUBLIC_BASE_URL === undefined),
+  {
+    message:
+      'SOLANA_RPC_URL and PUBLIC_BASE_URL must be set together — ' +
+      'wallet linking needs both, and neither is any use alone. ' +
+      'Leave both unset to run without wallet features.',
+    path: ['SOLANA_RPC_URL'],
+  },
+);
+
 export type Env = z.infer<typeof envSchema>;
+
+/**
+ * Whether wallet features are configured at all.
+ *
+ * Wallet linking gates token features and nothing else, so this being false is
+ * an ordinary state and not a degraded one: claiming must work with no wallet
+ * and no RPC endpoint anywhere in the environment.
+ */
+export function walletFeaturesEnabled(env: Env): boolean {
+  return env.SOLANA_RPC_URL !== undefined && env.PUBLIC_BASE_URL !== undefined;
+}
 
 /** Carries which keys are wrong and why — never what their values were. */
 export class EnvValidationError extends Error {

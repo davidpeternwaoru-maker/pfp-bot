@@ -30,6 +30,14 @@ const WITH_DEFAULTS = {
   CLAIM_ROOT: 'output/claims',
   // Empty authorises nobody, which is the safe default for an allowlist.
   ADMIN_IDS: [],
+  HTTP_PORT: 3000,
+} as const;
+
+/** A configured wallet setup: both halves, as the schema insists. */
+const WITH_WALLET = {
+  ...VALID,
+  SOLANA_RPC_URL: 'https://mainnet.helius-rpc.com/?api-key=not-a-real-key',
+  PUBLIC_BASE_URL: 'https://pfp.example.com',
 } as const;
 
 describe('parseEnv', () => {
@@ -140,5 +148,54 @@ describe('ADMIN_IDS', () => {
     // noticing, which for an authorisation list is the wrong way to fail.
     expect(problemsOf({ ...VALID, ADMIN_IDS: '123,not-an-id' }).join()).toContain('ADMIN_IDS');
     expect(problemsOf({ ...VALID, ADMIN_IDS: '@someone' }).join()).toContain('ADMIN_IDS');
+  });
+  it('runs with no wallet configuration at all, because claiming needs none', () => {
+    const parsed = parseEnv({ ...VALID });
+
+    // Not a degraded mode. Wallet linking gates token features and nothing
+    // else, so an operator who never intends to use them must not be forced
+    // to configure an RPC endpoint to run a drop.
+    expect(parsed.SOLANA_RPC_URL).toBeUndefined();
+    expect(parsed.PUBLIC_BASE_URL).toBeUndefined();
+  });
+
+  it('accepts both halves of the wallet configuration together', () => {
+    const parsed = parseEnv({ ...WITH_WALLET });
+    expect(parsed.SOLANA_RPC_URL).toBe(WITH_WALLET.SOLANA_RPC_URL);
+    expect(parsed.PUBLIC_BASE_URL).toBe(WITH_WALLET.PUBLIC_BASE_URL);
+  });
+
+  it('refuses half a wallet configuration, at startup rather than mid-flow', () => {
+    // Either half alone is a feature that fails when a member first reaches
+    // for it. Better to refuse to boot than to strand somebody part-way
+    // through linking a wallet.
+    expect(problemsOf({ ...VALID, SOLANA_RPC_URL: WITH_WALLET.SOLANA_RPC_URL }).join()).toContain(
+      'must be set together',
+    );
+    expect(problemsOf({ ...VALID, PUBLIC_BASE_URL: WITH_WALLET.PUBLIC_BASE_URL }).join()).toContain(
+      'must be set together',
+    );
+  });
+
+  it('refuses a plaintext RPC endpoint, because the provider key rides in it', () => {
+    const problems = problemsOf({
+      ...WITH_WALLET,
+      SOLANA_RPC_URL: 'http://mainnet.helius-rpc.com/?api-key=not-a-real-key',
+    });
+    expect(problems.join()).toContain('https');
+  });
+
+  it('refuses a plaintext signing page, which wallets would refuse anyway', () => {
+    const problems = problemsOf({ ...WITH_WALLET, PUBLIC_BASE_URL: 'http://pfp.example.com' });
+    expect(problems.join()).toContain('https');
+  });
+
+  it('never repeats a rejected value back in the problem it reports', () => {
+    const secret = 'https://mainnet.helius-rpc.com/?api-key=super-secret-value';
+    const problems = problemsOf({ ...VALID, SOLANA_RPC_URL: secret });
+
+    // The reason names the key, never the value. These strings end up in logs
+    // and crash reports, and this one carries a provider credential.
+    expect(problems.join()).not.toContain('super-secret-value');
   });
 });
