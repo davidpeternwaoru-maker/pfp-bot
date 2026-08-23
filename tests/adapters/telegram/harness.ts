@@ -50,6 +50,11 @@ export interface FakeDatabase {
   readonly canvas?: CanvasSize;
   readonly traits?: readonly TraitRecord[];
   readonly exclusions?: readonly ExclusionPair[];
+  /** Wallets already linked, keyed by member id. */
+  readonly wallets?: ReadonlyMap<
+    number,
+    { walletAddress: string | null; walletLinkedAt: Date | null }
+  >;
 }
 
 /**
@@ -62,10 +67,46 @@ export function fakePrisma(db: FakeDatabase): PrismaClient {
     byId.set(project.id, project);
   }
 
+  // Wallet state the /wallet command reads and writes. Held here rather than
+  // in FakeDatabase because these tests mutate it as they go.
+  const wallets = new Map<number, { walletAddress: string | null; walletLinkedAt: Date | null }>(
+    [...(db.wallets ?? new Map())].map(([memberId, entry]) => [memberId, { ...entry }]),
+  );
+  const challenges: { memberId: number; createdAt: Date }[] = [];
+
   const stub = {
     member: {
       upsert: (args: { where: { platform_externalId: { externalId: string } } }) =>
         Promise.resolve({ id: Number(args.where.platform_externalId.externalId) }),
+      findUnique: (args: { where: { id: number } }) =>
+        Promise.resolve(
+          wallets.get(args.where.id) ?? { walletAddress: null, walletLinkedAt: null },
+        ),
+      updateMany: (args: { where: { id: number } }) => {
+        const held = wallets.get(args.where.id);
+        if (held?.walletAddress == null) {
+          return Promise.resolve({ count: 0 });
+        }
+        wallets.set(args.where.id, { walletAddress: null, walletLinkedAt: null });
+        return Promise.resolve({ count: 1 });
+      },
+    },
+    walletChallenge: {
+      count: (args: { where: { memberId: number; createdAt: { gte: Date } } }) =>
+        Promise.resolve(
+          challenges.filter(
+            (row) =>
+              row.memberId === args.where.memberId && row.createdAt >= args.where.createdAt.gte,
+          ).length,
+        ),
+      findFirst: (args: { where: { memberId: number } }) =>
+        Promise.resolve(
+          challenges.filter((row) => row.memberId === args.where.memberId)[0] ?? null,
+        ),
+      create: (args: { data: { memberId: number } }) => {
+        challenges.push({ memberId: args.data.memberId, createdAt: new Date() });
+        return Promise.resolve({ id: challenges.length });
+      },
     },
     project: {
       findUnique: (args: { where: { slug?: string; id?: number } }) => {
@@ -142,6 +183,11 @@ export interface Harness {
   readonly sent: string[];
   /** Every outbound API call, in order. */
   readonly calls: ApiCall[];
+  /**
+   * The same calls with their untouched payloads, for assertions about options
+   * that never reach a caption — link previews, parse modes, keyboards.
+   */
+  readonly rawCalls: { method: string; payload: Record<string, unknown> }[];
   countOf(method: string): number;
   send(text: string, userId?: number): Promise<void>;
   press(data: string, messageId: number, userId?: number): Promise<void>;
@@ -153,6 +199,7 @@ export interface HarnessOptions {
   readonly renderCache?: RenderCache;
   readonly traitRoot?: string;
   readonly claimRoot?: string;
+  readonly publicBaseUrl?: string;
 }
 
 const EMPTY_DB: FakeDatabase = {
@@ -220,6 +267,7 @@ export async function createTraitFixtures(
 export function createHarness(options: HarnessOptions = {}): Harness {
   const sent: string[] = [];
   const calls: ApiCall[] = [];
+  const rawCalls: { method: string; payload: Record<string, unknown> }[] = [];
   const sessions = createInMemorySessionStore();
   const bindings = createInMemoryMessageBindings();
   let nextMessageId = 1000;
@@ -236,6 +284,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
     // Zero-lived, so every assertion sees the fixture's claimed set as it is
     // now rather than as it was at the top of the test.
     availability: createAvailability(prisma, { maxAgeMs: 0 }),
+    publicBaseUrl: options.publicBaseUrl,
     traitRoot: options.traitRoot ?? '.',
     claimRoot: options.claimRoot ?? '.',
     // Silenced: these tests assert on replies, not on log output.
@@ -272,6 +321,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
       .filter((data) => data.length > 0);
 
     calls.push({ method, text, messageId, buttons });
+    rawCalls.push({ method, payload });
     if (text !== undefined) {
       sent.push(text);
     }
@@ -295,6 +345,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
     bindings,
     sent,
     calls,
+    rawCalls,
     countOf(method: string): number {
       return calls.filter((call) => call.method === method).length;
     },
@@ -308,8 +359,17 @@ export function createHarness(options: HarnessOptions = {}): Harness {
           chat: { id: userId, type: 'private', first_name: 'Tester' },
           from: { id: userId, is_bot: false, first_name: 'Tester', username: 'tester' },
           text,
-          entities: text.startsWith('/start')
-            ? [{ type: 'bot_command', offset: 0, length: 6 }]
+          // Any leading /command, not just /start. grammY routes on the
+          // entity, so a command without one is silently never dispatched —
+          // which reads in a test exactly like a handler that does nothing.
+          entities: /^\/[a-z_]+/.exec(text)
+            ? [
+                {
+                  type: 'bot_command',
+                  offset: 0,
+                  length: (/^\/[a-z_]+/.exec(text) ?? [''])[0].length,
+                },
+              ]
             : [],
         },
       };

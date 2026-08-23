@@ -216,3 +216,57 @@ export function announcementText(
     traits.map((trait) => trait.name).join(' · '),
   ].join('\n');
 }
+
+/**
+ * Wallet copy.
+ *
+ * Every line here is written on the assumption that a member reading it may
+ * later be shown a convincing fake of it. So it states, more than once and in
+ * the plainest words available, that nothing in this product ever asks for a
+ * seed phrase — because the most valuable thing this bot can teach somebody is
+ * what a scam looks like when it arrives.
+ */
+
+export const WALLET_DISABLED =
+  'Wallet linking is not switched on for this bot. Nothing here needs one — claiming works without a wallet.';
+
+export const WALLET_NEVER_ASKS =
+  'We will never ask for your seed phrase or private key. Not here, not on the page, not ever. Anyone who does is stealing from you.';
+
+export function walletLinkPrompt(url: string, minutes: number): string {
+  return [
+    'Open this to link your wallet:',
+    url,
+    '',
+    `The link works once and lasts ${String(minutes)} minutes.`,
+    '',
+    'You will be asked to sign a message. It is not a transaction: it moves no',
+    'funds, approves no spending, and gives no access to your wallet.',
+    '',
+    WALLET_NEVER_ASKS,
+  ].join('\n');
+}
+
+export function walletLinked(address: string, linkedAt: Date): string {
+  return [
+    'Wallet linked.',
+    `${address}`,
+    `Verified ${formatMoment(linkedAt)}.`,
+    '',
+    'Send /wallet unlink to remove it. Linking again needs a fresh signature.',
+  ].join('\n');
+}
+
+export const WALLET_NONE_LINKED =
+  'No wallet linked. Send /wallet link to connect one. It is optional — claiming works without it.';
+
+export const WALLET_UNLINKED =
+  'Wallet unlinked. It is no longer connected to your account, and linking again will need a fresh signature.';
+
+export const WALLET_NOTHING_TO_UNLINK =
+  'You do not have a wallet linked, so there is nothing to remove.';
+
+export function walletRateLimited(retryAfterSeconds: number): string {
+  const minutes = Math.ceil(retryAfterSeconds / 60);
+  return `That is a lot of link attempts. Try again in ${String(minutes)} minute${minutes === 1 ? '' : 's'}.`;
+}

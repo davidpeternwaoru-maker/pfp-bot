@@ -146,6 +146,37 @@ export type { ClaimAnnounceSettings } from './db/project-repository.js';
 export { fetchTraitPack } from './db/trait-pack-repository.js';
 
 // ---------------------------------------------------------------------------
+// Wallets: proved by signature, never by a typed address
+// ---------------------------------------------------------------------------
+
+/**
+ * Linking gates token features and nothing else. No path here ever requests,
+ * accepts, transmits, logs or stores a private key or a seed phrase.
+ */
+export { completeLink, findLinkedWallet, unlinkWallet } from './wallet/link-service.js';
+export type { LinkedWallet, LinkOutcome, LinkRejection } from './wallet/link-service.js';
+
+export {
+  CHALLENGE_TTL_MS,
+  consumeChallenge,
+  findPendingChallenge,
+  issueChallenge,
+  pruneChallenges,
+} from './wallet/challenge.js';
+export type { IssuedChallenge, IssueResult, PendingChallenge } from './wallet/challenge.js';
+
+/** The exact text a member signs. Built identically on both sides. */
+export { challengeMessage } from './wallet/message.js';
+export type { ChallengeMessageInput } from './wallet/message.js';
+
+export { parseSolanaAddress } from './wallet/address.js';
+export type { AddressResult, SolanaAddress } from './wallet/address.js';
+
+/** Read-only, and denies on every error path. Never signs, never holds funds. */
+export { meetsThreshold, readTokenBalance, scaleThreshold } from './wallet/balance.js';
+export type { BalanceOutcome, TokenBalance } from './wallet/balance.js';
+
+// ---------------------------------------------------------------------------
 // State an adapter supplies or shares
 // ---------------------------------------------------------------------------
 

@@ -1,4 +1,5 @@
 import { createBot } from './adapters/telegram/bot.js';
+import { createHttpServer } from './adapters/http/server.js';
 import { createRateLimiter } from './core/rate-limit.js';
 import { createInMemorySessionStore } from './core/session.js';
 import { createRenderCache } from './core/render/cache.js';
@@ -46,13 +47,41 @@ const bot = createBot({
   rateLimiter,
   renderCache,
   availability,
+  publicBaseUrl: env.PUBLIC_BASE_URL,
   traitRoot: env.TRAIT_ROOT,
   claimRoot: env.CLAIM_ROOT,
   logger,
 });
 
+/**
+ * The signing page, started only when wallet features are configured.
+ *
+ * No listener at all is the right answer for a project that does not use
+ * wallets: an open port serving a page nobody can complete is a surface with
+ * no purpose.
+ */
+const httpServer =
+  env.PUBLIC_BASE_URL === undefined
+    ? undefined
+    : createHttpServer({ prisma, logger, publicBaseUrl: env.PUBLIC_BASE_URL });
+
+if (httpServer !== undefined) {
+  httpServer.listen(env.HTTP_PORT, () => {
+    logger.info('http.listening', { port: env.HTTP_PORT });
+  });
+}
+
 const shutdown = createShutdown({
   stopBot: () => bot.stop(),
+  stopHttp:
+    httpServer === undefined
+      ? undefined
+      : () =>
+          new Promise<void>((resolve) => {
+            httpServer.close(() => {
+              resolve();
+            });
+          }),
   disconnectDatabase: () => prisma.$disconnect(),
   logger,
 });

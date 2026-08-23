@@ -11,6 +11,11 @@ import type { Logger } from './logging/logger.js';
 export interface ShutdownSteps {
   /** Stopped first, so an in-flight update finishes before its database goes. */
   readonly stopBot: () => Promise<void>;
+  /**
+   * Closes the signing page listener, if there is one. Absent when wallet
+   * features are switched off, which is an ordinary configuration.
+   */
+  readonly stopHttp?: (() => Promise<void>) | undefined;
   readonly disconnectDatabase: () => Promise<void>;
   readonly logger: Logger;
 }
@@ -18,7 +23,7 @@ export interface ShutdownSteps {
 export type Shutdown = (signal: string) => Promise<void>;
 
 export function createShutdown(steps: ShutdownSteps): Shutdown {
-  const { stopBot, disconnectDatabase, logger } = steps;
+  const { stopBot, stopHttp, disconnectDatabase, logger } = steps;
   let started = false;
 
   return async (signal: string): Promise<void> => {
@@ -38,6 +43,16 @@ export function createShutdown(steps: ShutdownSteps): Shutdown {
       logger.error('shutdown.bot_stop_failed', {
         reason: error instanceof Error ? error.message : String(error),
       });
+    }
+
+    if (stopHttp !== undefined) {
+      try {
+        await stopHttp();
+      } catch (error) {
+        logger.error('shutdown.http_stop_failed', {
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     try {

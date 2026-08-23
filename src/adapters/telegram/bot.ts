@@ -8,9 +8,11 @@ import {
   findCollection,
   findMemberClaims,
   findProjectById,
+  findLinkedWallet,
   findProjectBySlug,
   loadClaimArtwork,
   guardClaim,
+  issueChallenge,
   loadPack,
   openBrowse,
   presentHeld,
@@ -19,6 +21,8 @@ import {
   rollFresh,
   rollPickOption,
   rollSlotCycle,
+  unlinkWallet,
+  CHALLENGE_TTL_MS,
 } from '../../core/ports.js';
 import type {
   Availability,
@@ -62,6 +66,13 @@ import {
   ROLL_SLOT_STUCK,
   ROLL_STALE,
   ROLL_UNDETERMINED,
+  WALLET_DISABLED,
+  WALLET_NONE_LINKED,
+  WALLET_NOTHING_TO_UNLINK,
+  WALLET_UNLINKED,
+  walletLinkPrompt,
+  walletLinked,
+  walletRateLimited,
 } from './replies.js';
 
 /** Telegram's identity for a sender, in the shape core understands. */
@@ -82,6 +93,12 @@ export interface BotDependencies {
   readonly rateLimiter: RateLimiter;
   readonly renderCache: RenderCache;
   readonly availability: Availability;
+  /**
+   * Where the signing page is served from, or undefined when wallet features
+   * are switched off. Undefined is an ordinary state, not a degraded one:
+   * claiming has never needed a wallet and still does not.
+   */
+  readonly publicBaseUrl?: string | undefined;
   readonly traitRoot: string;
   readonly claimRoot: string;
   readonly logger: Logger;
@@ -273,6 +290,64 @@ export function createBot(deps: BotDependencies): Bot {
         { caption },
       );
     }
+  });
+
+  /**
+   * Linking a wallet, checking one, and removing one.
+   *
+   * Entirely optional, and it gates token features only. Nothing in the claim
+   * path consults this, and nothing here is ever required to roll or claim.
+   */
+  bot.command('wallet', async (ctx) => {
+    const from = ctx.from;
+    if (from === undefined) {
+      return;
+    }
+
+    const member = await resolveMember(prisma, telegramIdentity(from));
+    const log = logger.child({ memberId: member.id });
+    const action = ctx.match.trim().toLowerCase();
+
+    if (action === 'unlink') {
+      const removed = await unlinkWallet(prisma, member.id);
+      log.info('wallet.unlink', { removed });
+      await ctx.reply(removed ? WALLET_UNLINKED : WALLET_NOTHING_TO_UNLINK);
+      return;
+    }
+
+    if (action !== 'link') {
+      const linked = await findLinkedWallet(prisma, member.id);
+      await ctx.reply(
+        linked === null ? WALLET_NONE_LINKED : walletLinked(linked.address, linked.linkedAt),
+      );
+      return;
+    }
+
+    // Checked here rather than at startup: a bot running without wallet
+    // features is the ordinary case, and it must answer the command rather
+    // than look broken.
+    if (deps.publicBaseUrl === undefined) {
+      await ctx.reply(WALLET_DISABLED);
+      return;
+    }
+
+    const issued = await issueChallenge({ prisma, memberId: member.id });
+    if (issued.kind === 'rate-limited') {
+      log.info('wallet.link_rate_limited');
+      await ctx.reply(walletRateLimited(issued.retryAfterSeconds));
+      return;
+    }
+
+    // The URL carries a one-time opaque token and nothing else. A member id
+    // here would identify a person to anyone who saw the link.
+    const url = new URL(`/link/${issued.challenge.token}`, deps.publicBaseUrl).toString();
+    log.info('wallet.link_started');
+
+    // link_preview_options off: a preview would send the one-time token to
+    // Telegram's fetcher, spending a single-use link before the member opens it.
+    await ctx.reply(walletLinkPrompt(url, Math.round(CHALLENGE_TTL_MS / 60_000)), {
+      link_preview_options: { is_disabled: true },
+    });
   });
 
   /** Every claim the member holds, across every collection. */
