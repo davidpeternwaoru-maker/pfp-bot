@@ -1,0 +1,46 @@
+# Fly.io deployment.
+#
+# One process runs both front ends: the Telegram bot on long polling, and the
+# signing page on HTTP. They share a database connection and a render cache,
+# and splitting them would mean running two machines to serve one drop.
+
+app = "pfp-bot"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  HTTP_PORT = "3000"
+  TRAIT_ROOT = "/data/trait-packs"
+  CLAIM_ROOT = "/data/claims"
+
+[http_service]
+  internal_port = 3000
+  # Fly terminates TLS and redirects, so the signing page is https from the
+  # outside without this process holding a certificate.
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  # Never zero. The bot polls Telegram continuously, so a machine that stopped
+  # would stop answering members, not merely stop serving the page.
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
+[[vm]]
+  # sharp compositing is CPU-bound and the render path is the slow one.
+  size = "shared-cpu-1x"
+  memory = "1gb"
+
+# Claimed artwork is reproducible from trait ids, but the trait pack itself is
+# not: it is uploaded once by an operator. A volume keeps both across deploys.
+[[mounts]]
+  source = "pfp_data"
+  destination = "/data"

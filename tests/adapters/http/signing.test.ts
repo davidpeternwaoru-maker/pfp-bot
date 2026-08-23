@@ -237,8 +237,18 @@ describe.skipIf(DATABASE_URL === undefined)('the signing page', () => {
     }
   }, 60_000);
 
+  it('answers a health check without touching the database', async () => {
+    // Liveness only. A database check here would turn a sleeping database into
+    // a restart loop, which would take the bot down with it — and restarting
+    // has never been the fix for a database that is slow.
+    const response = await fetch(`${origin}/health`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+  }, 60_000);
+
   it('serves nothing else at all', async () => {
-    for (const path of ['/', '/health', '/index.html', '/../src/index.ts', '/link']) {
+    for (const path of ['/', '/index.html', '/../src/index.ts', '/link']) {
       const response = await fetch(`${origin}${path}`);
       expect(response.status).toBe(404);
       // No stack, no path, no internal id in any body it returns.

@@ -121,6 +121,22 @@ export function createHttpServer(deps: HttpDependencies): Server {
   async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const path = new URL(request.url ?? '/', deps.publicBaseUrl).pathname;
 
+    // Liveness, not readiness, and deliberately not a database check.
+    //
+    // The question a platform asks here is "should I restart this process",
+    // and a sleeping or throttled database is not something restarting fixes —
+    // it would turn a slow database into a restart loop that also takes the
+    // bot down. What this asserts is narrow and true: the process is up and
+    // its event loop is turning.
+    if (path === '/health') {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        sendJson(response, 405, { ok: false });
+        return;
+      }
+      sendJson(response, 200, { ok: true });
+      return;
+    }
+
     const verify = VERIFY_PATH.exec(path);
     if (verify !== null) {
       if (request.method !== 'POST') {

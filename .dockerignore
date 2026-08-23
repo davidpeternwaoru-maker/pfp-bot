@@ -1,0 +1,21 @@
+# Never let a secret into a build context. The image would carry it forever,
+# in a layer, readable by anyone who pulls it.
+.env
+.env.*
+!.env.example
+
+node_modules
+dist
+coverage
+output
+.git
+.github
+
+# Regenerated inside the build, so a stale local copy must not shadow it.
+src/generated
+
+tests
+demo-traits
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
