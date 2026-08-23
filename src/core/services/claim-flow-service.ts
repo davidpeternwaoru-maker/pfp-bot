@@ -69,6 +69,11 @@ export async function attemptClaim(
       // presented to a member who now holds something permanent.
       await deps.sessions.clear(memberId, pack.projectId);
 
+      // One combination just left the pool. Dropping the cached answer here
+      // means the next member to look sees it as taken immediately, rather than
+      // being shown a tick for a combination this process knows is gone.
+      deps.availability.invalidate(pack.projectId);
+
       deps.logger.info('claim.completed', {
         projectId: pack.projectId,
         memberId,

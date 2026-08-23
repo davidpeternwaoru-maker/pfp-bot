@@ -73,13 +73,31 @@ export type { EntryExistingClaim, EntryInput, EntryOutcome, EntryProject } from 
 // Rolling and claiming
 // ---------------------------------------------------------------------------
 
-export { currentCombination, loadPack, rollFresh, rollSlotCycle } from './services/roll-service.js';
+export {
+  currentCombination,
+  guardClaim,
+  loadPack,
+  openBrowse,
+  presentHeld,
+  rollFresh,
+  rollPickOption,
+  rollSlotCycle,
+} from './services/roll-service.js';
 export type {
+  BrowseResult,
+  ClaimGuard,
   RolledCombination,
   RollDependencies,
   RollResult,
   SlotCycleResult,
 } from './services/roll-service.js';
+
+/** Browsing a slot by name, for a member who knows what they want. */
+export { BROWSE_PAGE_SIZE, browsePageCount, clampBrowsePage } from './roll/browse.js';
+export type { BrowseOption, BrowseView } from './roll/browse.js';
+
+/** What to offer somebody who has landed on a combination already held. */
+export type { CollisionAdvice } from './roll/collision.js';
 
 export { attemptClaim } from './services/claim-flow-service.js';
 export type { ClaimAttempt, ClaimFlowDependencies } from './services/claim-flow-service.js';
@@ -138,11 +156,19 @@ export { fetchTraitPack } from './db/trait-pack-repository.js';
  */
 export { createInMemorySessionStore, sessionKey } from './session.js';
 export type {
+  BrowseState,
   InMemorySessionStoreOptions,
   RollSession,
   RollSessionInput,
   RollSessionStore,
 } from './session.js';
+
+/**
+ * Cached "is this taken" answers, for what a front end shows. Never for what
+ * it enforces — a claim is decided by a unique index and nothing else.
+ */
+export { createAvailability } from './roll/availability.js';
+export type { Availability, AvailabilityOptions } from './roll/availability.js';
 
 /** Rolling and rendering are CPU-bound, so every front end needs this. */
 export { createRateLimiter } from './rate-limit.js';

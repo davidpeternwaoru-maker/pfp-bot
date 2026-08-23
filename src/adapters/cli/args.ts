@@ -189,3 +189,28 @@ export function requireMemberReference(args: ParsedArgs, name: string): MemberRe
     `--${name} must be "platform:id" or "platform:@handle", e.g. telegram:8853090779 or telegram:@someone`,
   );
 }
+
+/**
+ * A comma-separated list of slot names, e.g. --required background,body.
+ *
+ * Names are matched against what the pack actually contains by the caller: a
+ * typo that silently matched nothing would leave a slot optional that the
+ * operator believed they had made compulsory, and they would only find out
+ * when a member rendered a hole where the body should be.
+ */
+export function optionalNameList(args: ParsedArgs, name: string): readonly string[] {
+  const raw = optionalFlag(args, name);
+  if (raw === undefined) {
+    return [];
+  }
+
+  const parts = raw
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+
+  if (parts.length === 0) {
+    throw new CliError(`--${name} was given with no names in it`);
+  }
+  return parts;
+}

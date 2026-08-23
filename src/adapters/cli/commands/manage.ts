@@ -9,7 +9,14 @@ import type { TraitTier } from '../../../core/ports.js';
 import { readdir, stat } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import type { PrismaClient } from '../../../generated/prisma/client.js';
-import { optionalDate, optionalFlag, requireFlag, requireInt, requireSlug } from '../args.js';
+import {
+  optionalDate,
+  optionalFlag,
+  optionalNameList,
+  requireFlag,
+  requireInt,
+  requireSlug,
+} from '../args.js';
 import type { ParsedArgs } from '../args.js';
 import { confirmDestructive } from '../confirm.js';
 import { CliError } from '../errors.js';
@@ -206,18 +213,40 @@ export async function importTraitsCommand(
     throw new CliError(`no PNG traits found under ${dir}`);
   }
 
-  // Every slot gets a "none" option, so a member can choose to have no hat, no
-  // chain, no mouth. Added here rather than asked of the operator because a
-  // pack that is missing one in a single slot is a pack where that slot is
-  // silently compulsory, and nobody would notice until a member asked why.
+  // Every slot gets a "none" option by default, so a member can choose to have
+  // no hat, no chain, no mouth. Added here rather than asked of the operator
+  // because a pack missing one in a single slot is a pack where that slot is
+  // silently compulsory, and nobody would notice until a member asked why they
+  // could not take the hat off.
   //
   // It is an ordinary trait row pointing at a transparent layer. Nothing
   // downstream knows it is special, which is why nothing downstream can get it
   // wrong.
-  const noneImage = await ensureNoneImage(realRoot.path, canvas);
+  //
+  // --required names the slots carrying base artwork. A background or a body
+  // with a "none" option is a slot whose absence renders a hole, so the default
+  // has to be overridable — but only deliberately, and only by name.
   const layerOfSlot = new Map(traits.map((trait) => [trait.slot, trait.layerOrder] as const));
+  const required = optionalNameList(args, 'required');
+
+  // Checked against the pack rather than accepted as given: a typo would leave
+  // a slot optional that the operator believed they had just made compulsory.
+  const unknown = required.filter((slot) => !layerOfSlot.has(slot));
+  if (unknown.length > 0) {
+    throw new CliError(
+      `--required names ${unknown.map((slot) => `"${slot}"`).join(', ')}, which ` +
+        `${unknown.length === 1 ? 'is not a slot' : 'are not slots'} in this pack. ` +
+        `Found: ${[...layerOfSlot.keys()].join(', ')}.`,
+    );
+  }
+
+  const noneImage = await ensureNoneImage(realRoot.path, canvas);
+  const compulsory = new Set(required);
 
   for (const [slot, layerOrder] of layerOfSlot) {
+    if (compulsory.has(slot)) {
+      continue;
+    }
     // An operator who shipped their own none.png keeps it: a second row would
     // collide on (projectId, slot, name) and fail the whole import.
     const supplied = traits.some((trait) => trait.slot === slot && trait.name === NONE_TRAIT_NAME);
@@ -282,8 +311,12 @@ export async function importTraitsCommand(
 
   write(
     `imported ${String(written.count)} traits into ${project.name}\n\n${table(
-      ['slot', 'options'],
-      [...bySlot].map(([slot, count]) => [slot, String(count)]),
+      ['slot', 'options', 'optional'],
+      [...bySlot].map(([slot, count]) => [
+        slot,
+        String(count),
+        compulsory.has(slot) ? 'no' : 'yes',
+      ]),
       { numeric: [1], indent: '  ' },
     )}\n`,
   );

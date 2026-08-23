@@ -10,13 +10,18 @@ import {
   findProjectById,
   findProjectBySlug,
   loadClaimArtwork,
+  guardClaim,
   loadPack,
+  openBrowse,
+  presentHeld,
   resolveEntry,
   resolveMember,
   rollFresh,
+  rollPickOption,
   rollSlotCycle,
 } from '../../core/ports.js';
 import type {
+  Availability,
   ClaimFlowDependencies,
   MemberIdentity,
   RateLimiter,
@@ -38,7 +43,7 @@ import {
   promptConfirmation,
   showClaimed,
 } from './claim-flow.js';
-import { showCombination } from './presenter.js';
+import { showBrowse, showCombination } from './presenter.js';
 import { createInMemoryMessageBindings } from './message-binding.js';
 import type { MessageBindingStore } from './message-binding.js';
 import {
@@ -47,6 +52,7 @@ import {
   CLAIM_NEEDS_PROJECT,
   CLAIM_NONE_YET,
   CLAIM_RACE_LOST,
+  collisionReply,
   entryReply,
   existingClaimReply,
   GENERIC_ERROR,
@@ -75,6 +81,7 @@ export interface BotDependencies {
   readonly bindings?: MessageBindingStore;
   readonly rateLimiter: RateLimiter;
   readonly renderCache: RenderCache;
+  readonly availability: Availability;
   readonly traitRoot: string;
   readonly claimRoot: string;
   readonly logger: Logger;
@@ -94,6 +101,7 @@ export function createBot(deps: BotDependencies): Bot {
     prisma,
     sessions,
     renderCache: deps.renderCache,
+    availability: deps.availability,
     traitRoot: deps.traitRoot,
     logger,
   };
@@ -369,15 +377,47 @@ export function createBot(deps: BotDependencies): Bot {
     /** What the member is currently holding, or null if the pack moved on. */
     const held = currentCombination(pack, session.traitIds);
 
+    /**
+     * Puts the artwork back on screen, closing any open slot list.
+     *
+     * Re-presented rather than restored from the previous caption, so leaving a
+     * list refreshes whether the combination is still free. A member can spend
+     * a while reading option names, and the answer can change while they do.
+     */
+    const backToArtwork = async (): Promise<void> => {
+      if (held === null) {
+        await sessions.clear(session.memberId, session.projectId);
+        await ctx.reply(ROLL_STALE);
+        return;
+      }
+      const combination = await presentHeld(roll, pack, session.memberId, held);
+      await showCombination(ctx, presenter, pack, session.memberId, combination);
+    };
+
     try {
       switch (action.kind) {
         case 'claim': {
+          if (held === null) {
+            await sessions.clear(session.memberId, session.projectId);
+            await ctx.reply(ROLL_STALE);
+            return;
+          }
+
+          // Refused before the confirmation rather than after it. Browsing lets
+          // a member assemble a combination somebody already holds on purpose,
+          // and walking them through "claim this permanently?" only to refuse
+          // would look like a product that had not been paying attention.
+          const guard = await guardClaim(roll, pack, held);
+          if (guard.advice !== null) {
+            log.info('claim.already_held', { projectId: session.projectId });
+            await backToArtwork();
+            await ctx.reply(collisionReply(guard.advice));
+            return;
+          }
+
           // Never claims on the first press. A permanent, one-per-collection
           // decision does not happen on a single tap.
-          if (
-            held === null ||
-            (await promptConfirmation(ctx, bindings, session.memberId, pack, held)) === 'stale'
-          ) {
+          if ((await promptConfirmation(ctx, bindings, session.memberId, pack, held)) === 'stale') {
             await sessions.clear(session.memberId, session.projectId);
             await ctx.reply(ROLL_STALE);
           }
@@ -432,13 +472,30 @@ export function createBot(deps: BotDependencies): Bot {
               return;
             }
 
-            case 'race-lost':
+            case 'race-lost': {
+              log.info('claim.race_lost', { projectId: session.projectId });
+
+              // The guard above said this was free, so it went in the seconds
+              // between. Whether that reads as a race or as a wall depends on
+              // what is left around it, so ask before choosing the words: if a
+              // single slot change frees it, keeping them where they are and
+              // naming that change respects the combination they built. If
+              // nothing does, a fresh roll is the only useful answer.
+              deps.availability.invalidate(session.projectId);
+              const guard = held === null ? null : await guardClaim(roll, pack, held);
+
+              if (guard?.advice != null && !guard.advice.stuck) {
+                await backToArtwork();
+                await ctx.reply(collisionReply(guard.advice));
+                return;
+              }
+
               // Losing a race is not the member's fault and costs them nothing:
               // apologise and put a free combination in front of them at once.
-              log.info('claim.race_lost', { projectId: session.projectId });
               await ctx.reply(CLAIM_RACE_LOST);
               await freshRoll();
               return;
+            }
 
             case 'invalid':
               await ctx.reply(CLAIM_COMBINATION_INVALID);
@@ -492,6 +549,81 @@ export function createBot(deps: BotDependencies): Bot {
           }
           return;
         }
+
+        case 'open-browse':
+        case 'browse-page': {
+          // Opening names the slot; paging does not, because the member is
+          // already inside one. Reading it back from the session is what keeps
+          // the page button down to a page number.
+          const slotIndex =
+            action.kind === 'open-browse' ? action.slotIndex : session.browse?.slotIndex;
+
+          // A page press with no open list means the session was replaced
+          // under them. Nothing is lost, so put the artwork back rather than
+          // reporting an error for a button that was valid a moment ago.
+          if (slotIndex === undefined) {
+            await backToArtwork();
+            return;
+          }
+
+          const opened = await openBrowse(
+            roll,
+            pack,
+            session.memberId,
+            session.traitIds,
+            slotIndex,
+            action.kind === 'browse-page' ? action.pageIndex : 0,
+          );
+
+          if (
+            opened.kind === 'stale' ||
+            (await showBrowse(ctx, presenter, session.projectId, session.memberId, opened.view)) ===
+              'stale'
+          ) {
+            await sessions.clear(session.memberId, session.projectId);
+            await ctx.reply(ROLL_STALE);
+          }
+          return;
+        }
+
+        case 'pick-option': {
+          const browse = session.browse;
+          if (browse === null) {
+            log.info('callback.pick_without_browse');
+            await ctx.reply(ROLL_STALE);
+            return;
+          }
+
+          const result = await rollPickOption(
+            roll,
+            pack,
+            session.memberId,
+            session.traitIds,
+            browse,
+            action.positionOnPage,
+          );
+
+          if (result.kind === 'rolled') {
+            await showCombination(ctx, presenter, pack, session.memberId, result.combination);
+            return;
+          }
+
+          if (result.kind === 'unchanged') {
+            // The position was not on the page they have open. The callback is
+            // already answered and their list is still on screen, so the
+            // honest response is to leave both alone.
+            log.warn('callback.option_off_page');
+            return;
+          }
+
+          await sessions.clear(session.memberId, session.projectId);
+          await ctx.reply(ROLL_STALE);
+          return;
+        }
+
+        case 'close-browse':
+          await backToArtwork();
+          return;
       }
     } catch (error) {
       // A broken trait image is an operator problem, not a member's. It gets a

@@ -2,6 +2,7 @@ import { createBot } from './adapters/telegram/bot.js';
 import { createRateLimiter } from './core/rate-limit.js';
 import { createInMemorySessionStore } from './core/session.js';
 import { createRenderCache } from './core/render/cache.js';
+import { createAvailability } from './core/roll/availability.js';
 import type { Env } from './config/env.js';
 import { EnvValidationError, loadEnv } from './config/env.js';
 import { createPrismaClient } from './core/db/client.js';
@@ -34,6 +35,9 @@ const prisma = createPrismaClient(env.DATABASE_URL);
 const sessions = createInMemorySessionStore();
 const rateLimiter = createRateLimiter({ limit: ACTIONS_PER_MINUTE, windowMs: 60_000 });
 const renderCache = createRenderCache();
+// Answers what a caption says about a combination being free. Never what a
+// claim is allowed to do: that is a unique index, and it is not cached.
+const availability = createAvailability(prisma);
 
 const bot = createBot({
   token: env.TELEGRAM_BOT_TOKEN,
@@ -41,6 +45,7 @@ const bot = createBot({
   sessions,
   rateLimiter,
   renderCache,
+  availability,
   traitRoot: env.TRAIT_ROOT,
   claimRoot: env.CLAIM_ROOT,
   logger,

@@ -11,11 +11,26 @@
  * have a message id to use the same store.
  */
 
+/**
+ * Which slot a member has open, and where they are in its list.
+ *
+ * Held server-side rather than encoded into a button, so the position a front
+ * end sends back can only ever address the page the server itself last drew.
+ * A trait id in a callback payload is an attacker-supplied trait id; a position
+ * on a page the server chose is not.
+ */
+export interface BrowseState {
+  readonly slotIndex: number;
+  readonly pageIndex: number;
+}
+
 export interface RollSession {
   readonly memberId: number;
   readonly projectId: number;
   /** The combination currently on screen, in layer order. */
   readonly traitIds: readonly number[];
+  /** The slot list they have open, or null when the artwork is on screen. */
+  readonly browse: BrowseState | null;
   /** Stamped by the store, never by the caller — see RollSessionInput. */
   readonly updatedAt: number;
 }
@@ -24,8 +39,14 @@ export interface RollSession {
  * What a caller supplies. Freshness is the store's business: if callers passed
  * their own timestamp, one stale or zeroed value would silently make a live
  * session look expired.
+ *
+ * `browse` is optional and defaults to closed, because that is the honest
+ * default: every path that changes the combination is showing the artwork
+ * again, and a caller that had to remember to clear it would eventually not.
  */
-export type RollSessionInput = Omit<RollSession, 'updatedAt'>;
+export type RollSessionInput = Omit<RollSession, 'updatedAt' | 'browse'> & {
+  readonly browse?: BrowseState | null;
+};
 
 export interface RollSessionStore {
   get(memberId: number, projectId: number): Promise<RollSession | undefined>;
@@ -85,7 +106,10 @@ export function createInMemorySessionStore(
       const currentTime = now();
       prune(currentTime);
       sessions.set(sessionKey(state.memberId, state.projectId), {
-        ...state,
+        memberId: state.memberId,
+        projectId: state.projectId,
+        traitIds: state.traitIds,
+        browse: state.browse ?? null,
         updatedAt: currentTime,
       });
       return Promise.resolve();

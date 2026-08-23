@@ -1,4 +1,10 @@
-import type { EntryOutcome, TraitRecord, TraitTier } from '../../core/ports.js';
+import type {
+  BrowseView,
+  CollisionAdvice,
+  EntryOutcome,
+  TraitRecord,
+  TraitTier,
+} from '../../core/ports.js';
 
 /**
  * Every reply is plain text and no handler ever sets parse_mode. A project
@@ -58,10 +64,80 @@ export const ROLL_SLOT_STUCK = 'No other option fits there with what you are hol
 export const ROLL_RENDER_FAILED =
   'That combination would not render. Nothing is lost — try rerolling.';
 
-/** Caption under the rolled image: what the member is currently holding. */
-export function rollCaption(traits: readonly TraitRecord[]): string {
+/**
+ * Caption under the rolled image: what the member is currently holding, and
+ * whether it is still theirs to take.
+ *
+ * The availability line is advisory and reads that way. "Still free" rather
+ * than "reserved" is the honest wording — nothing is held back until the claim
+ * itself, and a member told it was reserved who then lost a race would have
+ * been lied to by this caption.
+ */
+export function rollCaption(traits: readonly TraitRecord[], available = true): string {
   const lines = traits.map((trait) => `${trait.slot}: ${trait.name}`);
-  return [...lines, '', 'Reroll, adjust a slot, or claim it.'].join('\n');
+  return [
+    ...lines,
+    '',
+    available
+      ? '✓ Still free — yours to claim.'
+      : '✕ Somebody already holds this exact combination.',
+    '',
+    available ? 'Reroll, adjust a slot, or claim it.' : 'Change a slot to find a free one.',
+  ].join('\n');
+}
+
+/** Caption over a slot's option list: where they are, and what is not shown. */
+export function browseCaption(view: BrowseView): string {
+  const lines = [
+    view.pageCount > 1
+      ? `${view.slotName} — ${String(view.total)} options, page ${String(view.pageIndex + 1)} of ${String(view.pageCount)}`
+      : `${view.slotName} — ${String(view.total)} options`,
+  ];
+
+  if (view.hiddenByExclusion > 0) {
+    // Never silently: a member who counted the options in the artwork and sees
+    // fewer here is owed the reason, and the reason names the fix.
+    lines.push(
+      '',
+      view.hiddenByExclusion === 1
+        ? '1 option is hidden because it clashes with another slot. Change that slot to reach it.'
+        : `${String(view.hiddenByExclusion)} options are hidden because they clash with another slot. Change that slot to reach them.`,
+    );
+  }
+
+  lines.push('', 'Pick one, or go back.');
+  return lines.join('\n');
+}
+
+/**
+ * What a member is told when they have assembled something already held.
+ *
+ * Once browsing exists this stops being a race somebody lost and becomes a
+ * place they deliberately walked to, so it is written to land as scarcity
+ * rather than as a fault. It never says who holds it: that is not a member's
+ * business, and naming them invites exactly the pressure this product should
+ * never create.
+ */
+export function collisionReply(advice: CollisionAdvice): string {
+  if (advice.stuck) {
+    return [
+      'That exact combination is already held.',
+      '',
+      'Everything one step away from it is taken too, so this corner of the collection is claimed out. Reroll for somewhere with more room.',
+    ].join('\n');
+  }
+
+  const slots = advice.freeingSlots;
+  const named =
+    slots.length === 1
+      ? `the ${slots[0] ?? ''}`
+      : `the ${slots.slice(0, -1).join(', the ')} or the ${slots[slots.length - 1] ?? ''}`;
+
+  return [
+    'That exact combination is already held — somebody got there first, and it is theirs permanently.',
+    '',
+    `Changing ${named} would land on one nobody has yet.`,
+  ].join('\n');
 }
 
 /** Shown before a claim is committed. It must not undersell permanence. */

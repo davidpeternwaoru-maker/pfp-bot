@@ -15,6 +15,7 @@ import { createInMemoryMessageBindings } from '../src/adapters/telegram/message-
 import { loadEnv } from '../src/config/env.js';
 import { createPrismaClient } from '../src/core/db/client.js';
 import { createRenderCache } from '../src/core/render/cache.js';
+import { createAvailability } from '../src/core/roll/availability.js';
 import { createLogger } from '../src/logging/logger.js';
 import { fetchTraitPack } from '../src/core/db/trait-pack-repository.js';
 import { drawUnclaimed } from '../src/core/roll/pool.js';
@@ -36,6 +37,7 @@ const bot = createBot({
   bindings,
   rateLimiter: createRateLimiter({ limit: 1000, windowMs: 60_000 }),
   renderCache,
+  availability: createAvailability(prisma),
   traitRoot: env.TRAIT_ROOT,
   claimRoot: env.CLAIM_ROOT,
   logger: createLogger({ level: 'error' }),

@@ -11,6 +11,7 @@ import type { RateLimiter } from '../../../src/core/rate-limit.js';
 import type { RollSessionStore } from '../../../src/core/session.js';
 import type { EntryExistingClaim, EntryProject } from '../../../src/core/entry.js';
 import { createRenderCache } from '../../../src/core/render/cache.js';
+import { createAvailability } from '../../../src/core/roll/availability.js';
 import type { RenderCache } from '../../../src/core/render/cache.js';
 import type { CanvasSize, ExclusionPair, TraitRecord } from '../../../src/core/render/types.js';
 import { createLogger } from '../../../src/logging/logger.js';
@@ -129,6 +130,8 @@ export interface ApiCall {
   readonly method: string;
   readonly text: string | undefined;
   readonly messageId: number | undefined;
+  /** Button rows, flattened to their callback data. Empty when there are none. */
+  readonly buttons: readonly string[];
 }
 
 export interface Harness {
@@ -221,13 +224,18 @@ export function createHarness(options: HarnessOptions = {}): Harness {
   const bindings = createInMemoryMessageBindings();
   let nextMessageId = 1000;
 
+  const prisma = fakePrisma(options.db ?? EMPTY_DB);
+
   const bot = createBot({
     token: '123456789:AAHtesttesttesttesttesttesttesttest1',
-    prisma: fakePrisma(options.db ?? EMPTY_DB),
+    prisma,
     sessions,
     bindings,
     rateLimiter: options.rateLimiter ?? createRateLimiter({ limit: 1000, windowMs: 60_000 }),
     renderCache: options.renderCache ?? createRenderCache(),
+    // Zero-lived, so every assertion sees the fixture's claimed set as it is
+    // now rather than as it was at the top of the test.
+    availability: createAvailability(prisma, { maxAgeMs: 0 }),
     traitRoot: options.traitRoot ?? '.',
     claimRoot: options.claimRoot ?? '.',
     // Silenced: these tests assert on replies, not on log output.
@@ -254,7 +262,16 @@ export function createHarness(options: HarnessOptions = {}): Harness {
         ? payload.message_id
         : undefined;
 
-    calls.push({ method, text, messageId });
+    const markup =
+      'reply_markup' in payload
+        ? (payload.reply_markup as { inline_keyboard?: { callback_data?: unknown }[][] })
+        : undefined;
+    const buttons = (markup?.inline_keyboard ?? [])
+      .flat()
+      .map((button) => (typeof button.callback_data === 'string' ? button.callback_data : ''))
+      .filter((data) => data.length > 0);
+
+    calls.push({ method, text, messageId, buttons });
     if (text !== undefined) {
       sent.push(text);
     }

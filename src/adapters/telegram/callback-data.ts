@@ -6,19 +6,34 @@
  *
  * A slot button's index is part of which button was pressed, not state, and it
  * is bounds-checked against the pack before use.
+ *
+ * Browsing follows the same rule and needs it more, because a list of options
+ * is exactly where trait ids would be convenient to encode. They are not
+ * encoded. A page button carries a page number, and an option button carries a
+ * position on the page — resolved against the slot and page the server itself
+ * last drew and recorded in the session. There is no id in the payload to
+ * tamper with, so the worst a forged one can do is choose a different option in
+ * a list the member already had open.
  */
 
 export const REROLL = 'r';
 export const CLAIM = 'c';
 export const CONFIRM_CLAIM = 'k';
 export const CANCEL_CLAIM = 'x';
+export const CLOSE_BROWSE = 'q';
 const SLOT_PREFIX = 's';
+const BROWSE_PREFIX = 'b';
+const PAGE_PREFIX = 'p';
+const OPTION_PREFIX = 'o';
 const COLLECTION_PAGE_PREFIX = 'g';
 
 /** Telegram's own ceiling is 64 bytes; ours is far below it. */
 const MAX_CALLBACK_DATA_LENGTH = 8;
 
 const SLOT_PATTERN = /^s(\d{1,2})$/;
+const BROWSE_PATTERN = /^b(\d{1,2})$/;
+const PAGE_PATTERN = /^p(\d{1,3})$/;
+const OPTION_PATTERN = /^o(\d{1,2})$/;
 const COLLECTION_PAGE_PATTERN = /^g(\d{1,3})$/;
 
 export type CallbackAction =
@@ -27,10 +42,26 @@ export type CallbackAction =
   | { readonly kind: 'claim' }
   | { readonly kind: 'confirm-claim' }
   | { readonly kind: 'cancel-claim' }
-  | { readonly kind: 'cycle-slot'; readonly slotIndex: number };
+  | { readonly kind: 'cycle-slot'; readonly slotIndex: number }
+  | { readonly kind: 'open-browse'; readonly slotIndex: number }
+  | { readonly kind: 'browse-page'; readonly pageIndex: number }
+  | { readonly kind: 'pick-option'; readonly positionOnPage: number }
+  | { readonly kind: 'close-browse' };
 
 export function slotAction(slotIndex: number): string {
   return `${SLOT_PREFIX}${String(slotIndex)}`;
+}
+
+export function browseAction(slotIndex: number): string {
+  return `${BROWSE_PREFIX}${String(slotIndex)}`;
+}
+
+export function browsePageAction(pageIndex: number): string {
+  return `${PAGE_PREFIX}${String(pageIndex)}`;
+}
+
+export function optionAction(positionOnPage: number): string {
+  return `${OPTION_PREFIX}${String(positionOnPage)}`;
 }
 
 export function collectionPageAction(pageIndex: number): string {
@@ -55,6 +86,15 @@ export function parseCollectionPage(raw: string | undefined): number | null {
   // claims the member holds, which is server-side state, so the page is
   // clamped against that rather than trusted from the payload.
   return Number.isSafeInteger(pageIndex) && pageIndex >= 0 ? pageIndex : null;
+}
+
+/** A non-negative integer captured by one of the patterns above, or null. */
+function indexFrom(match: RegExpExecArray | null): number | null {
+  if (match === null) {
+    return null;
+  }
+  const value = Number(match[1]);
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 /**
@@ -86,15 +126,32 @@ export function parseCallbackData(
     return { kind: 'cancel-claim' };
   }
 
-  const match = SLOT_PATTERN.exec(raw);
-  if (match === null) {
-    return null;
+  if (raw === CLOSE_BROWSE) {
+    return { kind: 'close-browse' };
   }
 
-  const slotIndex = Number(match[1]);
-  if (!Number.isSafeInteger(slotIndex) || slotIndex < 0 || slotIndex >= slotCount) {
-    return null;
+  // A slot index addresses the pack, so it is bounds-checked here. A page or a
+  // position addresses what the server last drew, which this function cannot
+  // see, so those carry only their shape and are resolved against the session.
+  const slotIndex = indexFrom(SLOT_PATTERN.exec(raw));
+  if (slotIndex !== null) {
+    return slotIndex < slotCount ? { kind: 'cycle-slot', slotIndex } : null;
   }
 
-  return { kind: 'cycle-slot', slotIndex };
+  const browseIndex = indexFrom(BROWSE_PATTERN.exec(raw));
+  if (browseIndex !== null) {
+    return browseIndex < slotCount ? { kind: 'open-browse', slotIndex: browseIndex } : null;
+  }
+
+  const pageIndex = indexFrom(PAGE_PATTERN.exec(raw));
+  if (pageIndex !== null) {
+    return { kind: 'browse-page', pageIndex };
+  }
+
+  const positionOnPage = indexFrom(OPTION_PATTERN.exec(raw));
+  if (positionOnPage !== null) {
+    return { kind: 'pick-option', positionOnPage };
+  }
+
+  return null;
 }

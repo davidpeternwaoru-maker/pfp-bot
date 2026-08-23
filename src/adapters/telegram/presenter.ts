@@ -1,9 +1,9 @@
-import type { RolledCombination, TraitPack } from '../../core/ports.js';
+import type { BrowseView, RolledCombination, TraitPack } from '../../core/ports.js';
 import { GrammyError, InputFile } from 'grammy';
 import type { Context } from 'grammy';
 import type { Logger } from '../../logging/logger.js';
-import { rollKeyboard } from './keyboard.js';
-import { rollCaption } from './replies.js';
+import { browseKeyboard, rollKeyboard } from './keyboard.js';
+import { browseCaption, rollCaption } from './replies.js';
 import type { MessageBindingStore } from './message-binding.js';
 
 /**
@@ -27,7 +27,7 @@ export async function showCombination(
   memberId: number,
   combination: RolledCombination,
 ): Promise<void> {
-  const caption = rollCaption(combination.traits);
+  const caption = rollCaption(combination.traits, combination.available);
   const keyboard = rollKeyboard(pack);
   const media = (): InputFile => new InputFile(combination.image, 'roll.png');
 
@@ -63,5 +63,43 @@ export async function showCombination(
       reason: error.description,
     });
     await sendFresh();
+  }
+}
+
+/**
+ * Swaps the rolling controls for a slot's option list, on the same message.
+ *
+ * The artwork stays exactly where it is and only the caption and buttons
+ * change. Sending a second message for the list would leave a member scrolling
+ * between the picture and the picker, and editing the photo would make opening
+ * a list cost a re-upload of an image that has not changed.
+ */
+export async function showBrowse(
+  ctx: Context,
+  deps: PresenterDependencies,
+  projectId: number,
+  memberId: number,
+  view: BrowseView,
+): Promise<'shown' | 'stale'> {
+  const messageId = await deps.bindings.messageFor(memberId, projectId);
+  const chatId = ctx.chat?.id;
+  if (messageId === undefined || chatId === undefined) {
+    return 'stale';
+  }
+
+  try {
+    await ctx.api.editMessageCaption(chatId, messageId, {
+      caption: browseCaption(view),
+      reply_markup: browseKeyboard(view),
+    });
+    return 'shown';
+  } catch (error) {
+    // The member may have deleted the message. Reported as stale so the caller
+    // starts them again rather than leaving them tapping dead buttons.
+    if (!(error instanceof GrammyError)) {
+      throw error;
+    }
+    deps.logger.info('browse.edit_failed', { memberId, projectId, reason: error.description });
+    return 'stale';
   }
 }

@@ -23,7 +23,7 @@ import { CliError } from './errors.js';
 const USAGE = `pfp-bot admin
 
   create-project   --slug <slug> --name <name> --width <px> --height <px> [--mascot <name>]
-  import-traits    --project <slug> --dir <path> [--replace] [--yes]
+  import-traits    --project <slug> --dir <path> [--required <slots>] [--replace] [--yes]
   capacity         --project <slug> --members <expected>
   open-claims      --project <slug> [--opens-at <iso>] [--closes-at <iso>] [--yes]
   close-claims     --project <slug> [--yes]
@@ -36,7 +36,9 @@ const USAGE = `pfp-bot admin
 
 Trait pack layout: one directory per slot named "<layerOrder>-<slot>",
 containing "name.png", "name.tier.png" or "name.tier.weight.png". Every slot
-also gets a "none" option automatically, so no slot is compulsory.
+gets a "none" option automatically, so nothing is silently compulsory. Pass
+--required background,body for the slots carrying base artwork, where "none"
+would render a hole rather than an absence.
 
 award is for a reserved combination of traits. issue-bespoke and issue-custom
 are for a finished one-of-one image, given as --file relative to the trait
