@@ -1,8 +1,11 @@
-import { awardCombination } from '../../../core/claim/award-service.js';
-import { fetchTraitPack } from '../../../core/db/trait-pack-repository.js';
+import {
+  awardCombination,
+  fetchTraitPack,
+  findMemberByHandle,
+  findMemberByIdentity,
+} from '../../../core/ports.js';
 import type { PrismaClient } from '../../../generated/prisma/client.js';
 import type { Logger } from '../../../logging/logger.js';
-import { findMemberByHandle, findMemberByIdentity } from '../../../core/db/member-repository.js';
 import { requireIdentity, requireIdList, requireMemberReference, requireSlug } from '../args.js';
 import type { PlatformIdentity } from '../args.js';
 import type { ParsedArgs } from '../args.js';

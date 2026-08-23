@@ -9,7 +9,17 @@ export default defineConfig({
         // Everything the product does, with no front end involved. This suite
         // must keep passing with src/adapters deleted — that is the layering
         // guarantee, expressed as something runnable rather than a convention.
-        test: { name: 'core', environment: 'node', include: ['tests/core/**/*.test.ts'] },
+        test: {
+          name: 'core',
+          environment: 'node',
+          include: ['tests/core/**/*.test.ts'],
+          // Run core's files one at a time. Two of them open twenty concurrent
+          // database transactions each; in parallel they exhaust the
+          // connection pool and fail as timeouts, which looks like a
+          // correctness bug and is really the test harness competing with
+          // itself. Serial is slower and says the same thing every run.
+          fileParallelism: false,
+        },
       },
       {
         test: {

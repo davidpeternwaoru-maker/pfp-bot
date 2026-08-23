@@ -28,7 +28,8 @@
     "bench:claims": "tsx scripts/bench-claims.ts",
     "admin": "tsx src/cli/index.ts",
     "test:core": "vitest run --project core",
-    "test:adapters": "vitest run --project adapters"
+    "test:adapters": "vitest run --project adapters",
+    "check:layers": "tsx scripts/check-layers.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.9.1",

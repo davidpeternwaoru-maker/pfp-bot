@@ -1,24 +1,36 @@
+import {
+  TraitImageError,
+  attemptClaim,
+  collectionPage,
+  currentCombination,
+  findAnnounceSettings,
+  findClaimForMember,
+  findCollection,
+  findMemberClaims,
+  findProjectById,
+  findProjectBySlug,
+  loadClaimArtwork,
+  loadPack,
+  resolveEntry,
+  resolveMember,
+  rollFresh,
+  rollSlotCycle,
+} from '../../core/ports.js';
+import type {
+  ClaimFlowDependencies,
+  MemberIdentity,
+  RateLimiter,
+  RenderCache,
+  RollDependencies,
+  RollSessionStore,
+} from '../../core/ports.js';
 import { Bot, GrammyError, HttpError, InputFile } from 'grammy';
 import type { Context } from 'grammy';
 import type { UserFromGetMe } from 'grammy/types';
-import { resolveMember } from '../../core/db/member-repository.js';
-import type { MemberIdentity } from '../../core/db/member-repository.js';
-import {
-  findAnnounceSettings,
-  findClaimForMember,
-  findProjectById,
-  findProjectBySlug,
-} from '../../core/db/project-repository.js';
-import { findCollection, findMemberClaims } from '../../core/db/claim-repository.js';
-import { loadClaimArtwork } from '../../core/claim/artwork.js';
 import type { PrismaClient } from '../../generated/prisma/client.js';
-import type { RenderCache } from '../../core/render/cache.js';
-import { TraitImageError } from '../../core/render/errors.js';
 import type { Logger } from '../../logging/logger.js';
 import { parseCallbackData, parseCollectionPage } from './callback-data.js';
 import { collectionKeyboard, formatCollectionPage } from './collection.js';
-import { collectionPage } from '../../core/collection.js';
-import { resolveEntry } from '../../core/entry.js';
 import { normaliseUsername, parseStartPayload } from './payload.js';
 import {
   announceClaim,
@@ -26,8 +38,6 @@ import {
   promptConfirmation,
   showClaimed,
 } from './claim-flow.js';
-import { attemptClaim } from '../../core/services/claim-flow-service.js';
-import type { ClaimFlowDependencies } from '../../core/services/claim-flow-service.js';
 import { showCombination } from './presenter.js';
 import { createInMemoryMessageBindings } from './message-binding.js';
 import type { MessageBindingStore } from './message-binding.js';
@@ -47,15 +57,6 @@ import {
   ROLL_STALE,
   ROLL_UNDETERMINED,
 } from './replies.js';
-import type { RateLimiter } from '../../core/rate-limit.js';
-import {
-  currentCombination,
-  loadPack,
-  rollFresh,
-  rollSlotCycle,
-} from '../../core/services/roll-service.js';
-import type { RollDependencies } from '../../core/services/roll-service.js';
-import type { RollSessionStore } from '../../core/session.js';
 
 /** Telegram's identity for a sender, in the shape core understands. */
 function telegramIdentity(from: { id: number; username?: string | undefined }): MemberIdentity {

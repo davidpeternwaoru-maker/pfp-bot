@@ -9,6 +9,7 @@ import { buildTraitPack } from '../../src/core/render/pack.js';
 import type { TraitPack, TraitRecord } from '../../src/core/render/types.js';
 import type { PrismaClient } from '../../src/generated/prisma/client.js';
 import { makeTempRoot, solidPng } from '../helpers/fixtures.js';
+import { assertDatabaseResponsive } from '../helpers/database.js';
 
 /**
  * The proof that the product works.
@@ -58,6 +59,10 @@ function countOf(outcomes: readonly ClaimOutcome[], kind: ClaimOutcome['kind']):
 describe.skipIf(DATABASE_URL === undefined)('concurrent claiming', () => {
   beforeAll(async () => {
     prisma = createPrismaClient(DATABASE_URL ?? '');
+
+    // Before building any fixture: a dead database should say so in one line,
+    // not surface as a hook timeout two minutes from now.
+    await assertDatabaseResponsive(prisma);
     traitRoot = await makeTempRoot();
     claimRoot = await makeTempRoot();
     slug = `concurrency-${String(Date.now())}`;
@@ -136,13 +141,25 @@ describe.skipIf(DATABASE_URL === undefined)('concurrent claiming', () => {
     if (prisma === undefined) {
       return;
     }
-    await prisma.claim.deleteMany({ where: { projectId } });
-    await prisma.trait.deleteMany({ where: { projectId } });
-    await prisma.project.deleteMany({ where: { id: projectId } });
-    await prisma.member.deleteMany({ where: { id: { in: memberIds } } });
+
+    // Setup may have stopped part-way — an unreachable database fails the
+    // preflight before any fixture exists. Cleanup has to cope with that, or
+    // the real reason for the failure is buried under a cleanup crash.
+    if (projectId !== undefined) {
+      await prisma.claim.deleteMany({ where: { projectId } });
+      await prisma.trait.deleteMany({ where: { projectId } });
+      await prisma.project.deleteMany({ where: { id: projectId } });
+    }
+    if (memberIds !== undefined && memberIds.length > 0) {
+      await prisma.member.deleteMany({ where: { id: { in: memberIds } } });
+    }
     await prisma.$disconnect();
-    await rm(traitRoot, { recursive: true, force: true });
-    await rm(claimRoot, { recursive: true, force: true });
+
+    for (const directory of [traitRoot, claimRoot]) {
+      if (directory !== undefined) {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
   }, 120_000);
 
   it('lets exactly one member win a contested combination', async () => {

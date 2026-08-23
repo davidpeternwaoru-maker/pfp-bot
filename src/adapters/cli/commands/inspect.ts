@@ -1,6 +1,5 @@
+import { fetchTraitPack, openPoolCapacity, openTraits } from '../../../core/ports.js';
 import { writeFile } from 'node:fs/promises';
-import { fetchTraitPack } from '../../../core/db/trait-pack-repository.js';
-import { openPoolCapacity, openTraits } from '../../../core/render/pack.js';
 import type { PrismaClient } from '../../../generated/prisma/client.js';
 import { optionalFlag, requireInt, requireSlug } from '../args.js';
 import type { ParsedArgs } from '../args.js';

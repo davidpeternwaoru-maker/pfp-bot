@@ -1,7 +1,6 @@
+import type { ClaimedRecord, TraitPack, TraitRecord } from '../../core/ports.js';
 import { InputFile } from 'grammy';
 import type { Api, Context } from 'grammy';
-import type { ClaimedRecord } from '../../core/claim/claim-service.js';
-import type { TraitPack, TraitRecord } from '../../core/render/types.js';
 import type { Logger } from '../../logging/logger.js';
 import { confirmKeyboard, rollKeyboard } from './keyboard.js';
 import { announcementText, claimConfirmPrompt, claimedReply, rollCaption } from './replies.js';

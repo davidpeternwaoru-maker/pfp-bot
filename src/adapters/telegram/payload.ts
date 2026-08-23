@@ -1,5 +1,5 @@
-import { parseSlug } from '../../core/slug.js';
-import type { SlugResult } from '../../core/slug.js';
+import { parseSlug } from '../../core/ports.js';
+import type { SlugResult } from '../../core/ports.js';
 
 /**
  * Telegram-specific input handling.

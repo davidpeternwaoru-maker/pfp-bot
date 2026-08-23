@@ -1,5 +1,5 @@
+import { createPrismaClient } from '../../core/ports.js';
 import { EnvValidationError, loadEnv } from '../../config/env.js';
-import { createPrismaClient } from '../../core/db/client.js';
 import { createLogger } from '../../logging/logger.js';
 import { parseArgv } from './args.js';
 import { awardCommand } from './commands/award.js';

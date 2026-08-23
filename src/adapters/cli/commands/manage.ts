@@ -1,10 +1,8 @@
+import { TraitImageError, loadTraitImage, resolveWithinRoot } from '../../../core/ports.js';
+import type { TraitTier } from '../../../core/ports.js';
 import { readdir, stat } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
-import { resolveWithinRoot } from '../../../core/fs/within-root.js';
-import { loadTraitImage } from '../../../core/render/image.js';
-import { TraitImageError } from '../../../core/render/errors.js';
 import type { PrismaClient } from '../../../generated/prisma/client.js';
-import type { TraitTier } from '../../../core/render/types.js';
 import { optionalDate, optionalFlag, requireFlag, requireInt, requireSlug } from '../args.js';
 import type { ParsedArgs } from '../args.js';
 import { confirmDestructive } from '../confirm.js';

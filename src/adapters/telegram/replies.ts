@@ -1,5 +1,4 @@
-import type { EntryOutcome } from '../../core/entry.js';
-import type { TraitRecord, TraitTier } from '../../core/render/types.js';
+import type { EntryOutcome, TraitRecord, TraitTier } from '../../core/ports.js';
 
 /**
  * Every reply is plain text and no handler ever sets parse_mode. A project

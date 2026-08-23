@@ -51,5 +51,25 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // The other half of the layering rule. Adapters may use core, but only
+    // through its stated contract: a deep import is how a boundary turns into
+    // twenty accidental ones nobody agreed to.
+    files: ['src/adapters/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/core/*/**', '**/core/[a-z]*.js', '!**/core/ports.js'],
+              message:
+                'import core through core/ports.js. If you need something it does not export, widen the contract there deliberately.',
+            },
+          ],
+        },
+      ],
+    },
+  },
   prettier,
 );

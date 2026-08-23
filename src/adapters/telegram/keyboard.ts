@@ -1,6 +1,6 @@
+import type { TraitPack } from '../../core/ports.js';
 import { InlineKeyboard } from 'grammy';
 import { CANCEL_CLAIM, CLAIM, CONFIRM_CLAIM, REROLL, slotAction } from './callback-data.js';
-import type { TraitPack } from '../../core/render/types.js';
 
 /** Beyond this, button labels start truncating on a narrow phone. */
 const SLOT_BUTTONS_PER_ROW = 3;

@@ -1,6 +1,5 @@
+import type { CollectionEntry, CollectionPageView } from '../../core/ports.js';
 import { InlineKeyboard } from 'grammy';
-import type { CollectionEntry } from '../../core/db/claim-repository.js';
-import type { CollectionPageView } from '../../core/collection.js';
 import { collectionPageAction } from './callback-data.js';
 
 /** How a collection page reads in Telegram. Paging itself lives in core. */

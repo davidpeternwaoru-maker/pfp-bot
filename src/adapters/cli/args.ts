@@ -1,4 +1,4 @@
-import { MAX_SLUG_LENGTH, parseSlug } from '../../core/slug.js';
+import { MAX_SLUG_LENGTH, parseSlug } from '../../core/ports.js';
 import type { Platform } from '../../generated/prisma/enums.js';
 import { CliError } from './errors.js';
 

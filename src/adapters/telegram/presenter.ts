@@ -1,7 +1,6 @@
+import type { RolledCombination, TraitPack } from '../../core/ports.js';
 import { GrammyError, InputFile } from 'grammy';
 import type { Context } from 'grammy';
-import type { RolledCombination } from '../../core/services/roll-service.js';
-import type { TraitPack } from '../../core/render/types.js';
 import type { Logger } from '../../logging/logger.js';
 import { rollKeyboard } from './keyboard.js';
 import { rollCaption } from './replies.js';
