@@ -198,4 +198,41 @@ describe('ADMIN_IDS', () => {
     // and crash reports, and this one carries a provider credential.
     expect(problems.join()).not.toContain('super-secret-value');
   });
+  it('treats a key left blank as absent, not as a malformed value', () => {
+    // "PUBLIC_BASE_URL=" in a .env file arrives as an empty string. Reading
+    // that as a present-but-broken value refuses to boot over a key somebody
+    // deliberately left empty, which is the opposite of what empty means.
+    const parsed = parseEnv({ ...VALID, SOLANA_RPC_URL: '', PUBLIC_BASE_URL: '   ' });
+
+    expect(parsed.SOLANA_RPC_URL).toBeUndefined();
+    expect(parsed.PUBLIC_BASE_URL).toBeUndefined();
+  });
+
+  it('allows http on localhost while developing, where a browser already does', () => {
+    // Not a concession. Browsers grant http://localhost a secure context
+    // because there is no network path to intercept, and wallet adapters rely
+    // on that — without it the signing page could not be developed at all.
+    for (const base of ['http://localhost:3000', 'http://127.0.0.1:3000']) {
+      const parsed = parseEnv({ ...WITH_WALLET, NODE_ENV: 'development', PUBLIC_BASE_URL: base });
+      expect(parsed.PUBLIC_BASE_URL).toBe(base);
+    }
+  });
+
+  it('refuses http on localhost in production, where there is a network path', () => {
+    const problems = problemsOf({
+      ...WITH_WALLET,
+      NODE_ENV: 'production',
+      PUBLIC_BASE_URL: 'http://localhost:3000',
+    });
+    expect(problems.join()).toContain('must be https in production');
+  });
+
+  it('never exempts the RPC endpoint, which is never local', () => {
+    const problems = problemsOf({
+      ...WITH_WALLET,
+      NODE_ENV: 'development',
+      SOLANA_RPC_URL: 'http://localhost:8899',
+    });
+    expect(problems.join()).toContain('provider key travels inside this URL');
+  });
 });

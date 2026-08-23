@@ -20,6 +20,29 @@ const TELEGRAM_BOT_TOKEN_PATTERN = /^\d{6,16}:[A-Za-z0-9_-]{30,}$/;
 
 export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 
+/**
+ * An optional URL, where an empty value means absent.
+ *
+ * `KEY=` in a .env file arrives as an empty string, not as undefined. Without
+ * this, a key left blank on purpose reads as a present-but-malformed value and
+ * the process refuses to start — which is the opposite of what leaving it blank
+ * was meant to say.
+ */
+const optionalUrl = z.preprocess(
+  (value) => (typeof value === 'string' && value.trim().length === 0 ? undefined : value),
+  z.string().url().optional(),
+);
+
+/** Loopback, where a browser grants a secure context over plain http. */
+function isLoopback(value: string): boolean {
+  try {
+    const { hostname } = new URL(value);
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+  } catch {
+    return false;
+  }
+}
+
 const baseEnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']),
   // Not a secret, so a default is safe here — unlike DATABASE_URL or the bot
@@ -69,11 +92,7 @@ const baseEnvSchema = z.object({
    * configured at all, so an unset endpoint disables those features rather
    * than refusing to boot.
    */
-  SOLANA_RPC_URL: z
-    .string()
-    .url()
-    .refine((value) => value.startsWith('https://'), 'must be https, never http')
-    .optional(),
+  SOLANA_RPC_URL: optionalUrl,
   /**
    * Where members reach this process from a browser, e.g.
    * https://pfp.example.com. Used to build the signing page link.
@@ -82,11 +101,7 @@ const baseEnvSchema = z.object({
    * page served over http can be rewritten in transit, and what it would be
    * rewritten to is a request to sign something else.
    */
-  PUBLIC_BASE_URL: z
-    .string()
-    .url()
-    .refine((value) => value.startsWith('https://'), 'must be https, never http')
-    .optional(),
+  PUBLIC_BASE_URL: optionalUrl,
   /** Port the signing page and health checks are served on. */
   HTTP_PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
   ADMIN_IDS: z
@@ -125,16 +140,48 @@ const baseEnvSchema = z.object({
  * run time, it is a member part-way through linking a wallet when the flow
  * discovers it cannot finish.
  */
-export const envSchema = baseEnvSchema.refine(
-  (env) => (env.SOLANA_RPC_URL === undefined) === (env.PUBLIC_BASE_URL === undefined),
-  {
-    message:
-      'SOLANA_RPC_URL and PUBLIC_BASE_URL must be set together — ' +
-      'wallet linking needs both, and neither is any use alone. ' +
-      'Leave both unset to run without wallet features.',
-    path: ['SOLANA_RPC_URL'],
-  },
-);
+export const envSchema = baseEnvSchema.superRefine((env, ctx) => {
+  if ((env.SOLANA_RPC_URL === undefined) !== (env.PUBLIC_BASE_URL === undefined)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['SOLANA_RPC_URL'],
+      message:
+        'SOLANA_RPC_URL and PUBLIC_BASE_URL must be set together — wallet linking ' +
+        'needs both, and neither is any use alone. Leave both blank to run without ' +
+        'wallet features, or set PUBLIC_BASE_URL to http://localhost:3000 while developing.',
+    });
+  }
+
+  // The provider key rides inside this URL, so plain http would put it on the
+  // wire in clear text. No loopback exception: a real endpoint is never local.
+  if (env.SOLANA_RPC_URL !== undefined && !env.SOLANA_RPC_URL.startsWith('https://')) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['SOLANA_RPC_URL'],
+      message: 'must be https, never http — the provider key travels inside this URL',
+    });
+  }
+
+  if (env.PUBLIC_BASE_URL !== undefined && !env.PUBLIC_BASE_URL.startsWith('https://')) {
+    // Loopback is exempt outside production, and not as a concession: browsers
+    // grant http://localhost a secure context precisely because there is no
+    // network path to intercept, and wallet adapters rely on that to be
+    // developable at all. In production there is a network path, so there is
+    // no exception to make.
+    const allowed = env.NODE_ENV !== 'production' && isLoopback(env.PUBLIC_BASE_URL);
+    if (!allowed) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['PUBLIC_BASE_URL'],
+        message:
+          env.NODE_ENV === 'production'
+            ? 'must be https in production — a signing page served over http can be ' +
+              'rewritten in transit into a request to sign something else'
+            : 'must be https, or http on localhost while developing',
+      });
+    }
+  }
+});
 
 export type Env = z.infer<typeof envSchema>;
 
