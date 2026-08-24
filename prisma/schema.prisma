@@ -43,6 +43,51 @@ enum ClaimType {
   custom
 }
 
+/// Where a commission has got to.
+///
+/// Payment comes before approval, which is what makes a decline owe a refund.
+/// The alternative — approve first, then charge — spares the refund but means
+/// an operator commits to work before knowing they will be paid for it.
+enum CommissionStatus {
+  /// Brief submitted, nothing owed yet by anyone.
+  awaiting_payment
+  /// Paid, sitting in the operator queue. Nothing is produced from here
+  /// without a deliberate approval.
+  awaiting_approval
+  /// Operator said yes. Work has not started.
+  approved
+  /// Work has started. Distinct from approved so a member waiting can tell
+  /// the difference between being accepted and being drawn.
+  in_production
+  /// Artwork issued as a custom claim. Terminal.
+  delivered
+  /// Refused. Terminal, and owes a refund.
+  declined
+  /// Withdrawn before payment. Terminal, owes nothing.
+  cancelled
+}
+
+/// Why a commission was refused.
+///
+/// A fixed list rather than free text, and that is the whole design of the
+/// approval gate: the operator taps one of these and the member is told
+/// automatically. An operator composing a decline is an operator negotiating,
+/// and this system exists so that never happens.
+enum DeclineReason {
+  /// Third-party characters, logos, or anything else somebody else owns.
+  copyrighted_material
+  /// A real person's face or likeness.
+  real_person
+  /// Offensive, hateful, or sexual content.
+  prohibited_content
+  /// Branding belonging to another project.
+  rival_branding
+  /// Understood, allowed, and simply not drawable as described.
+  not_producible
+  /// The brief could not be understood well enough to produce.
+  brief_unclear
+}
+
 enum TraitTier {
   open
   gated
@@ -71,9 +116,12 @@ model Project {
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
-  traits     Trait[]
-  exclusions Exclusion[]
-  claims     Claim[]
+  traits             Trait[]
+  exclusions         Exclusion[]
+  claims             Claim[]
+  commissionSettings CommissionSettings?
+  commissions        Commission[]
+  commissionWaitlist CommissionWaitlist[]
 }
 
 /// One artwork layer option, e.g. slot "eyes", name "visor".
@@ -137,8 +185,10 @@ model Member {
   /// When the current address was proved. Cleared on unlink.
   walletLinkedAt DateTime?
 
-  claims     Claim[]
-  challenges WalletChallenge[]
+  claims             Claim[]
+  challenges         WalletChallenge[]
+  commissions        Commission[]
+  commissionWaitlist CommissionWaitlist[]
 
   // One row per identity per platform. The same person arriving through two
   // front ends is two members until something deliberately links them, which
@@ -232,4 +282,153 @@ model WalletChallenge {
   @@index([memberId, createdAt])
   // Expired rows are swept by age.
   @@index([expiresAt])
+}
+
+/// Whether a project sells commissions, and on what terms.
+///
+/// Separate from Project because it is optional and detailed: most projects
+/// never sell one, and folding a dozen nullable columns into Project would
+/// make the common case carry the cost of the rare one.
+model CommissionSettings {
+  id        Int @id @default(autoincrement())
+  projectId Int @unique
+
+  /// Off by default. A project that has not yet decided its price, capacity
+  /// and what it will refuse should not be quietly open for orders.
+  enabled Boolean @default(false)
+
+  /// Price in USDC cents. An integer rather than a float because money that
+  /// rounds is money somebody argues about, and rather than Decimal because
+  /// two places is all a price needs and Int needs no decimal library.
+  priceUsdcCents Int @default(0)
+
+  /// Share of each commission owed to the project, in basis points, so 12.5%
+  /// is expressible. Copied onto each order at order time; see Commission.
+  treasuryShareBps Int @default(0)
+
+  /// Commissions accepted per calendar month. Zero means none.
+  monthlyCapacity Int @default(0)
+
+  /// Optional token gate. Both or neither: a mint with no threshold gates on
+  /// nothing, and a threshold with no mint has nothing to measure.
+  tokenMint    String?
+  /// Minimum holding in human units, e.g. "1000" or "0.5". Text rather than a
+  /// number so it is scaled against the mint's real decimals, never a float.
+  tokenMinimum String?
+
+  /// Which slots a member may commission. Empty means none are eligible.
+  eligibleSlots String[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+/// One member's order for personalised artwork.
+model Commission {
+  id        Int @id @default(autoincrement())
+  projectId Int
+  memberId  Int
+
+  status CommissionStatus @default(awaiting_payment)
+
+  /// Price and treasury share are copied from settings at order time rather
+  /// than read live. Accounting has to survive a project changing its price:
+  /// a payable report that recomputed from current settings would silently
+  /// restate what was owed on orders already paid for.
+  priceUsdcCents   Int
+  treasuryShareBps Int
+
+  /// Operator-recorded payment reference, e.g. a transaction signature. Free
+  /// text because a human transcribes it from a wallet, and validating a
+  /// shape this system does not verify on chain would only pretend to check.
+  paymentReference String?
+  paidAt           DateTime?
+
+  declineReason DeclineReason?
+
+  approvedAt DateTime?
+  startedAt  DateTime?
+  declinedAt DateTime?
+
+  /// The claim produced. Null until delivery, and set exactly once.
+  deliveredClaimId Int?      @unique
+  deliveredAt      DateTime?
+
+  /// Set when the refund a decline owes has been paid. Null while it is still
+  /// owed, which is exactly what the payable report reads.
+  refundedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  member  Member            @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  briefs  CommissionBrief[]
+
+  /// "<memberId>" while the order is live, null once it is finished.
+  ///
+  /// Postgres treats nulls as distinct, so this enforces one live order per
+  /// member per project while letting any number of finished ones sit beside
+  /// it. Two open orders is one member holding two people's worth of a
+  /// capacity the project promised to everybody.
+  openOrderKey String?
+
+  @@unique([projectId, openOrderKey])
+  // The monthly capacity count and the operator queue both read this.
+  @@index([projectId, status, createdAt])
+  @@index([memberId])
+}
+
+/// What a member asked for, as answers to a fixed questionnaire.
+///
+/// Never a blank text box. A vague brief is what creates conversation, and
+/// conversation is what this whole design exists to eliminate — so every field
+/// is either chosen from a list or hard length-limited.
+model CommissionBrief {
+  id           Int @id @default(autoincrement())
+  commissionId Int
+
+  /// 0 is the original. 1 is the single revision a member is allowed.
+  revision Int @default(0)
+
+  /// Which slot is being customised. Checked against the project's eligible
+  /// slots at submission.
+  slot String
+
+  /// Length-limited and character-set validated at entry, and never rendered
+  /// into an image automatically — every commission passes through a human.
+  textContent   String?
+  /// Chosen from a fixed palette, never a free-form colour value.
+  colour        String?
+  /// Optional reference image, as a path inside the commission root.
+  referencePath String?
+  /// Anything else, hard length-limited.
+  note          String?
+
+  createdAt DateTime @default(now())
+
+  commission Commission @relation(fields: [commissionId], references: [id], onDelete: Cascade)
+
+  // One brief per revision. The cap is load-bearing: unlimited revisions is
+  // how a self-serve system quietly turns into a design argument by proxy.
+  @@unique([commissionId, revision])
+}
+
+/// Members waiting for capacity to open next month.
+model CommissionWaitlist {
+  id        Int @id @default(autoincrement())
+  projectId Int
+  memberId  Int
+
+  createdAt  DateTime  @default(now())
+  /// Set once they have been told a slot opened, so nobody is told twice.
+  notifiedAt DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  member  Member  @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, memberId])
+  @@index([projectId, notifiedAt])
 }
