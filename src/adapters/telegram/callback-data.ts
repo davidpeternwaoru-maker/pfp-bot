@@ -21,6 +21,7 @@ export const CLAIM = 'c';
 export const CONFIRM_CLAIM = 'k';
 export const CANCEL_CLAIM = 'x';
 export const CLOSE_BROWSE = 'q';
+export const WALLET_LINK = 'w';
 const SLOT_PREFIX = 's';
 const BROWSE_PREFIX = 'b';
 const PAGE_PREFIX = 'p';
@@ -46,7 +47,8 @@ export type CallbackAction =
   | { readonly kind: 'open-browse'; readonly slotIndex: number }
   | { readonly kind: 'browse-page'; readonly pageIndex: number }
   | { readonly kind: 'pick-option'; readonly positionOnPage: number }
-  | { readonly kind: 'close-browse' };
+  | { readonly kind: 'close-browse' }
+  | { readonly kind: 'wallet-link' };
 
 export function slotAction(slotIndex: number): string {
   return `${SLOT_PREFIX}${String(slotIndex)}`;
@@ -128,6 +130,10 @@ export function parseCallbackData(
 
   if (raw === CLOSE_BROWSE) {
     return { kind: 'close-browse' };
+  }
+
+  if (raw === WALLET_LINK) {
+    return { kind: 'wallet-link' };
   }
 
   // A slot index addresses the pack, so it is bounds-checked here. A page or a

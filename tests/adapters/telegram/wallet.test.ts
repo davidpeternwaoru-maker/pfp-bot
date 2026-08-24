@@ -40,6 +40,54 @@ describe('/wallet when linking is switched off', () => {
 
     expect(h.sent.join('\n')).toContain('No wallet linked');
   });
+
+  it('offers no button, because there is nothing behind it', async () => {
+    const h = createHarness({ db: DB });
+    await h.send('/wallet');
+
+    // A button whose only possible answer is "not switched on" is a dead end
+    // wearing a button, which is worse than the plain sentence.
+    expect(h.calls.flatMap((call) => call.buttons)).not.toContain('w');
+  });
+});
+
+describe('/wallet with nothing linked yet', () => {
+  it('offers a button rather than a command to type', async () => {
+    const h = harness();
+    await h.send('/wallet', 555);
+
+    // The reply used to end with "send /wallet link", which is homework rather
+    // than a next action. Every other dead end in this product answers with
+    // something tappable, and this one now does too.
+    expect(h.calls.flatMap((call) => call.buttons)).toContain('w');
+    expect(h.sent.join('\n')).not.toContain('/wallet link');
+  });
+
+  it('starts the same flow the command does when the button is pressed', async () => {
+    const h = harness();
+    await h.send('/wallet', 555);
+
+    const before = h.calls.length;
+    await h.press('w', 1001, 555);
+
+    // Answered first, so the button never spins.
+    expect(h.calls[before]?.method).toBe('answerCallbackQuery');
+
+    // And it produces a real signing link, not a second instruction.
+    const reply = h.sent.join('\n');
+    expect(reply).toContain(`${BASE_URL}/link/`);
+    expect(reply).toContain('works once');
+  });
+
+  it('needs no roll session behind it, unlike every other button', async () => {
+    // The member has never opened a project, so there is no session and no
+    // message binding. Linking a wallet must not require either.
+    const h = harness();
+    await h.press('w', 4242, 555);
+
+    expect(h.sent.join('\n')).toContain(`${BASE_URL}/link/`);
+    expect(h.sent.join('\n')).not.toContain('expired');
+  });
 });
 
 describe('/wallet link', () => {

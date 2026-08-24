@@ -10,6 +10,7 @@ import {
   optionAction,
   REROLL,
   slotAction,
+  WALLET_LINK,
 } from './callback-data.js';
 
 /** Beyond this, button labels start truncating on a narrow phone. */
@@ -119,4 +120,16 @@ export function confirmKeyboard(): InlineKeyboard {
     .text('Yes, claim it permanently', CONFIRM_CLAIM)
     .row()
     .text('Go back', CANCEL_CLAIM);
+}
+
+/**
+ * Offered beside "no wallet linked", so the reply names a next tap rather than
+ * a second command to type.
+ *
+ * Telling somebody to send /wallet link is not a next action, it is homework.
+ * The rest of this product answers a dead end with a button, and this reply
+ * was the one place that did not.
+ */
+export function walletLinkKeyboard(): InlineKeyboard {
+  return new InlineKeyboard().text('Link a wallet', WALLET_LINK);
 }

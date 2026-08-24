@@ -258,7 +258,7 @@ export function walletLinked(address: string, linkedAt: Date): string {
 }
 
 export const WALLET_NONE_LINKED =
-  'No wallet linked. Send /wallet link to connect one. It is optional — claiming works without it.';
+  'No wallet linked yet. Linking is optional — claiming works perfectly well without one, and it only unlocks token features.';
 
 export const WALLET_UNLINKED =
   'Wallet unlinked. It is no longer connected to your account, and linking again will need a fresh signature.';

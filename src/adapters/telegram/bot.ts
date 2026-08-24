@@ -38,7 +38,7 @@ import type { Context } from 'grammy';
 import type { UserFromGetMe } from 'grammy/types';
 import type { PrismaClient } from '../../generated/prisma/client.js';
 import type { Logger } from '../../logging/logger.js';
-import { parseCallbackData, parseCollectionPage } from './callback-data.js';
+import { parseCallbackData, parseCollectionPage, WALLET_LINK } from './callback-data.js';
 import { collectionKeyboard, formatCollectionPage } from './collection.js';
 import { normaliseUsername, parseStartPayload } from './payload.js';
 import {
@@ -48,6 +48,7 @@ import {
   showClaimed,
 } from './claim-flow.js';
 import { showBrowse, showCombination } from './presenter.js';
+import { walletLinkKeyboard } from './keyboard.js';
 import { createInMemoryMessageBindings } from './message-binding.js';
 import type { MessageBindingStore } from './message-binding.js';
 import {
@@ -298,6 +299,39 @@ export function createBot(deps: BotDependencies): Bot {
    * Entirely optional, and it gates token features only. Nothing in the claim
    * path consults this, and nothing here is ever required to roll or claim.
    */
+  /**
+   * Issues a challenge and sends the signing link.
+   *
+   * Shared by the /wallet link command and the button beside "no wallet
+   * linked", so the two cannot drift into offering different flows.
+   */
+  const startWalletLink = async (ctx: Context, memberId: number, log: Logger): Promise<void> => {
+    // Checked here rather than at startup: a bot running without wallet
+    // features is the ordinary case, and it must answer rather than look broken.
+    if (deps.publicBaseUrl === undefined) {
+      await ctx.reply(WALLET_DISABLED);
+      return;
+    }
+
+    const issued = await issueChallenge({ prisma, memberId });
+    if (issued.kind === 'rate-limited') {
+      log.info('wallet.link_rate_limited');
+      await ctx.reply(walletRateLimited(issued.retryAfterSeconds));
+      return;
+    }
+
+    // The URL carries a one-time opaque token and nothing else. A member id
+    // here would identify a person to anyone who saw the link.
+    const url = new URL(`/link/${issued.challenge.token}`, deps.publicBaseUrl).toString();
+    log.info('wallet.link_started');
+
+    // link_preview_options off: a preview would send the one-time token to
+    // Telegram's fetcher, spending a single-use link before the member opens it.
+    await ctx.reply(walletLinkPrompt(url, Math.round(CHALLENGE_TTL_MS / 60_000)), {
+      link_preview_options: { is_disabled: true },
+    });
+  };
+
   bot.command('wallet', async (ctx) => {
     const from = ctx.from;
     if (from === undefined) {
@@ -317,37 +351,24 @@ export function createBot(deps: BotDependencies): Bot {
 
     if (action !== 'link') {
       const linked = await findLinkedWallet(prisma, member.id);
+      if (linked !== null) {
+        await ctx.reply(walletLinked(linked.address, linked.linkedAt));
+        return;
+      }
+      // A button, not an instruction to type a second command. Telling
+      // somebody to send /wallet link is homework, and every other dead end in
+      // this product answers with something tappable.
+      //
+      // No button when linking is switched off: offering one that can only
+      // reply "not switched on" would be a dead end wearing a button.
       await ctx.reply(
-        linked === null ? WALLET_NONE_LINKED : walletLinked(linked.address, linked.linkedAt),
+        WALLET_NONE_LINKED,
+        deps.publicBaseUrl === undefined ? {} : { reply_markup: walletLinkKeyboard() },
       );
       return;
     }
 
-    // Checked here rather than at startup: a bot running without wallet
-    // features is the ordinary case, and it must answer the command rather
-    // than look broken.
-    if (deps.publicBaseUrl === undefined) {
-      await ctx.reply(WALLET_DISABLED);
-      return;
-    }
-
-    const issued = await issueChallenge({ prisma, memberId: member.id });
-    if (issued.kind === 'rate-limited') {
-      log.info('wallet.link_rate_limited');
-      await ctx.reply(walletRateLimited(issued.retryAfterSeconds));
-      return;
-    }
-
-    // The URL carries a one-time opaque token and nothing else. A member id
-    // here would identify a person to anyone who saw the link.
-    const url = new URL(`/link/${issued.challenge.token}`, deps.publicBaseUrl).toString();
-    log.info('wallet.link_started');
-
-    // link_preview_options off: a preview would send the one-time token to
-    // Telegram's fetcher, spending a single-use link before the member opens it.
-    await ctx.reply(walletLinkPrompt(url, Math.round(CHALLENGE_TTL_MS / 60_000)), {
-      link_preview_options: { is_disabled: true },
-    });
+    await startWalletLink(ctx, member.id, log);
   });
 
   /** Every claim the member holds, across every collection. */
@@ -401,6 +422,14 @@ export function createBot(deps: BotDependencies): Bot {
           keyboard === undefined ? {} : { reply_markup: keyboard },
         );
       }
+      return;
+    }
+
+    // Linking belongs to a message with no roll behind it, so it is handled
+    // before any session lookup. Who is asking comes from the sender, never
+    // from the payload, so nobody can start a link for somebody else.
+    if (ctx.callbackQuery.data === WALLET_LINK) {
+      await startWalletLink(ctx, member.id, log);
       return;
     }
 
