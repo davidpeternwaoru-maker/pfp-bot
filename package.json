@@ -27,6 +27,7 @@
     "verify:claim": "tsx scripts/verify-claim.ts",
     "bench:claims": "tsx scripts/bench-claims.ts",
     "admin": "tsx src/adapters/cli/index.ts",
+    "deploy": "flyctl deploy --remote-only --ha=false",
     "test:core": "vitest run --project core",
     "test:adapters": "vitest run --project adapters",
     "check:layers": "tsx scripts/check-layers.ts"

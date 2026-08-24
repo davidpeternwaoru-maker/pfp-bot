@@ -13,8 +13,11 @@ primary_region = "iad"
 [env]
   NODE_ENV = "production"
   HTTP_PORT = "3000"
-  TRAIT_ROOT = "/data/trait-packs"
-  CLAIM_ROOT = "/data/claims"
+  # Inside the image rather than on a volume. Trait artwork therefore ships
+  # with a deploy and changing it means deploying again, which is fine while
+  # testing and is not how a live drop should run — see the note by [[vm]].
+  TRAIT_ROOT = "/app/trait-packs"
+  CLAIM_ROOT = "/app/output/claims"
 
 [http_service]
   internal_port = 3000
@@ -25,6 +28,13 @@ primary_region = "iad"
   auto_start_machines = true
   # Never zero. The bot polls Telegram continuously, so a machine that stopped
   # would stop answering members, not merely stop serving the page.
+  #
+  # Exactly one, and that ceiling matters as much as the floor. Telegram allows
+  # a single long-polling connection per token, so a second machine does not
+  # add redundancy — the two terminate each other's getUpdates with a 409 and
+  # crash-loop, and the bot answers nobody while they do. Fly adds a second
+  # machine for high availability unless told otherwise, so deploy with
+  # `npm run deploy`, which passes --ha=false.
   min_machines_running = 1
 
   [[http_service.checks]]
@@ -35,12 +45,15 @@ primary_region = "iad"
     path = "/health"
 
 [[vm]]
-  # sharp compositing is CPU-bound and the render path is the slow one.
+  # The smallest size sharp and Node fit in comfortably. 256mb runs out of
+  # memory compositing anything above a small canvas, and an out-of-memory
+  # kill during a claim is the worst moment for one.
   size = "shared-cpu-1x"
-  memory = "1gb"
+  memory = "512mb"
 
-# Claimed artwork is reproducible from trait ids, but the trait pack itself is
-# not: it is uploaded once by an operator. A volume keeps both across deploys.
-[[mounts]]
-  source = "pfp_data"
-  destination = "/data"
+# No volume, deliberately, and this is a testing posture rather than a
+# finished one. Claimed artwork is reproducible from trait ids so losing it on
+# deploy costs nothing but CPU; the trait pack is not reproducible, so it has
+# to be rebuilt into the image every time it changes. Before a real drop this
+# wants a volume back — a pack that only exists in an image is a pack one
+# failed build away from gone.
