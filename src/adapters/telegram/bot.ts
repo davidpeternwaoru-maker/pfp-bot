@@ -79,6 +79,8 @@ import {
 } from './claim-flow.js';
 import { showBrowse, showCombination } from './presenter.js';
 import { downloadUpload, uploadRejectionReply } from './uploads.js';
+import { assertEveryCommandHandled } from './commands.js';
+import type { CommandName } from './commands.js';
 import {
   commissionStepKeyboard,
   declineReasonKeyboard,
@@ -231,6 +233,20 @@ export function createBot(deps: BotDependencies): Bot {
 
     await next();
   });
+
+  /**
+   * Registers a handler for a command the menu declares.
+   *
+   * The name is typed against COMMANDS, so a handler for a command nobody
+   * publishes will not compile — and every registration is recorded, so the
+   * assertion below can catch the reverse. Between the two, the menu and the
+   * handlers cannot drift apart.
+   */
+  const registered = new Set<string>();
+  const command = (name: CommandName, handler: Parameters<typeof bot.command>[1]): void => {
+    registered.add(name);
+    bot.command(name, handler);
+  };
 
   const drafts = deps.drafts ?? createInMemoryDraftStore();
   const adminIds = deps.adminIds ?? [];
@@ -404,7 +420,7 @@ export function createBot(deps: BotDependencies): Bot {
     await showQueueEntry(ctx, telegramUserId);
   };
 
-  bot.command('start', async (ctx) => {
+  command('start', async (ctx) => {
     const from = ctx.from;
     if (from === undefined) {
       return;
@@ -465,7 +481,7 @@ export function createBot(deps: BotDependencies): Bot {
    * session, so there is usually nothing left to infer from, and guessing the
    * wrong collection would show someone the wrong artwork.
    */
-  bot.command('mine', async (ctx) => {
+  command('mine', async (ctx) => {
     const from = ctx.from;
     if (from === undefined) {
       return;
@@ -578,7 +594,7 @@ export function createBot(deps: BotDependencies): Bot {
     });
   };
 
-  bot.command('wallet', async (ctx) => {
+  command('wallet', async (ctx) => {
     const from = ctx.from;
     if (from === undefined) {
       return;
@@ -624,7 +640,7 @@ export function createBot(deps: BotDependencies): Bot {
    * different verb to ask where theirs is — and an order that goes silent is
    * the failure this whole flow is designed around.
    */
-  bot.command('commission', async (ctx) => {
+  command('commission', async (ctx) => {
     const from = ctx.from;
     if (from === undefined) {
       return;
@@ -728,7 +744,7 @@ export function createBot(deps: BotDependencies): Bot {
    * Everything here is one tap. Nothing opens a text box, because an operator
    * writing to a member is precisely what this design exists to prevent.
    */
-  bot.command('queue', async (ctx) => {
+  command('queue', async (ctx) => {
     const from = ctx.from;
     if (from === undefined) {
       return;
@@ -896,7 +912,7 @@ export function createBot(deps: BotDependencies): Bot {
   });
 
   /** Every claim the member holds, across every collection. */
-  bot.command('collection', async (ctx) => {
+  command('collection', async (ctx) => {
     const from = ctx.from;
     if (from === undefined) {
       return;
@@ -1536,6 +1552,10 @@ export function createBot(deps: BotDependencies): Bot {
       logger.warn('handler.apology_undeliverable', { updateId: ctx.update.update_id });
     });
   });
+
+  // Checked before the bot is handed back, so a command published into
+  // everybody's menu with nothing behind it cannot start.
+  assertEveryCommandHandled(registered);
 
   return bot;
 }

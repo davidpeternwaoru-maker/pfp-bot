@@ -1,5 +1,6 @@
 import { createBot } from './adapters/telegram/bot.js';
 import { createHttpServer } from './adapters/http/server.js';
+import { syncCommandMenu } from './adapters/telegram/commands.js';
 import { createRateLimiter } from './core/rate-limit.js';
 import { createInMemorySessionStore } from './core/session.js';
 import { createRenderCache } from './core/render/cache.js';
@@ -104,6 +105,11 @@ try {
   await bot.start({
     onStart: (info) => {
       logger.info('bot.started', { botId: info.id, nodeEnv: env.NODE_ENV });
+
+      // Published once the bot is known to be up, so a menu is never set for
+      // a token that turned out to be rejected. Not awaited: the menu is
+      // presentation, and members should be served while it is being set.
+      void syncCommandMenu(bot.api, env.ADMIN_IDS, logger);
     },
   });
 } catch (error) {
