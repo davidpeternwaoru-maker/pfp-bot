@@ -11,6 +11,7 @@ import {
 } from './commands/manage.js';
 import { issueOneOfOneCommand } from './commands/one-of-one.js';
 import { commissionSettingsCommand, payablesCommand } from './commands/commissions.js';
+import { eligibilityCommand, groupCommand } from './commands/group.js';
 import { CliError } from './errors.js';
 
 /**
@@ -34,6 +35,8 @@ const USAGE = `pfp-bot admin
   issue-custom     --issuer <platform:id> --project <slug> --to <member> --file <path> [--yes]
   export-holders   --project <slug> [--out <file.csv>]
   stats            --project <slug>
+  group            --project <slug> [--chat <id>] [--announce|--silent] [--detach]
+  eligibility      --project <slug> [--open | --in-group <id> [--days <n>]]
   commissions      --project <slug> [--enable|--disable] [--price <usdc>] [--capacity <n>]
                    [--share <percent>] [--slots a,b] [--mint <addr> --minimum <amount>]
   payables         [--project <slug>]
@@ -124,6 +127,12 @@ async function main(): Promise<number> {
           },
           'custom',
         );
+
+      case 'group':
+        return await groupCommand(prisma, args, write);
+
+      case 'eligibility':
+        return await eligibilityCommand(prisma, args, write);
 
       case 'commissions':
         return await commissionSettingsCommand(prisma, args, write);

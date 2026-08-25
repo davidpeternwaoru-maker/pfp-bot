@@ -71,6 +71,8 @@ export interface FakeDatabase {
     | undefined;
   /** The stored eligibility rule, as it would come out of the JSON column. */
   readonly eligibilityRule?: unknown;
+  /** What tenure is measured from. Defaults to now, i.e. no tenure yet. */
+  readonly knownSince?: Date;
   /** Claims to report for /verify, keyed by member id. */
   readonly claimsByMember?: ReadonlyMap<
     number,
@@ -138,6 +140,8 @@ export function fakePrisma(db: FakeDatabase): PrismaClient {
     }[];
   }
 
+  /** When each member was first confirmed in a project's group. */
+  const groupSeen = new Map<string, Date>();
   const commissions: FakeCommission[] = [];
   const waitlist: { projectId: number; memberId: number }[] = [];
   let nextCommissionId = 1;
@@ -233,6 +237,31 @@ export function fakePrisma(db: FakeDatabase): PrismaClient {
   };
 
   const stub = {
+    groupMembership: {
+      upsert: (args: {
+        where: { projectId_memberId: { projectId: number; memberId: number } };
+      }) => {
+        const { projectId, memberId } = args.where.projectId_memberId;
+        const key = `${String(projectId)}:${String(memberId)}`;
+        // Set once and never moved forward, exactly as the real one does —
+        // an upsert that refreshed it would reset everybody's tenure.
+        const existing = groupSeen.get(key);
+        if (existing !== undefined) {
+          return Promise.resolve({ knownSince: existing });
+        }
+        const knownSince = db.knownSince ?? new Date();
+        groupSeen.set(key, knownSince);
+        return Promise.resolve({ knownSince });
+      },
+      findUnique: (args: {
+        where: { projectId_memberId: { projectId: number; memberId: number } };
+      }) => {
+        const { projectId, memberId } = args.where.projectId_memberId;
+        const found = groupSeen.get(`${String(projectId)}:${String(memberId)}`);
+        return Promise.resolve(found === undefined ? null : { knownSince: found });
+      },
+      deleteMany: () => Promise.resolve({ count: 0 }),
+    },
     commissionSettings: {
       findUnique: (args: { where: { projectId: number } }) =>
         Promise.resolve(db.commissionTerms?.get(args.where.projectId) ?? null),
@@ -408,6 +437,15 @@ export interface HarnessOptions {
   readonly claimRoot?: string;
   /** Telegram ids allowed to work the commission queue. Empty authorises nobody. */
   readonly adminIds?: readonly string[];
+  /**
+   * What getChatMember should report, for eligibility checks.
+   *
+   * 'error' makes the call throw, which is the case that matters most: a gate
+   * that cannot be checked has to refuse, and there is no other way to drive
+   * that path.
+   */
+  readonly chatMemberStatus?:
+    'member' | 'administrator' | 'creator' | 'restricted' | 'left' | 'kicked' | 'error';
   readonly publicBaseUrl?: string;
 }
 
@@ -507,6 +545,16 @@ export function createHarness(options: HarnessOptions = {}): Harness {
 
   // Intercept outbound API calls instead of letting them reach Telegram.
   bot.api.config.use((_prev, method, payload) => {
+    // Eligibility asks Telegram whether somebody is in a group. 'error' makes
+    // it throw, which is the path that has to refuse.
+    if (method === 'getChatMember') {
+      const status = options.chatMemberStatus ?? 'member';
+      if (status === 'error') {
+        return Promise.reject(new Error('Bad Request: chat not found'));
+      }
+      return Promise.resolve({ ok: true, result: { status, user: { id: 0 } } } as never);
+    }
+
     // editMessageMedia nests its caption inside `media`; everything else is
     // flat. Reading only the flat one would make a final claim caption
     // invisible to every assertion.
