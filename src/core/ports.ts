@@ -214,3 +214,91 @@ export { createPrismaClient } from './db/client.js';
 /** The one check between operator input and reading arbitrary files. */
 export { resolveWithinRoot } from './fs/within-root.js';
 export type { ContainmentFailure, ContainmentResult } from './fs/within-root.js';
+
+// ---------------------------------------------------------------------------
+// Commissions: artwork a member orders and pays for
+// ---------------------------------------------------------------------------
+
+export {
+  COMMISSION_PALETTE,
+  COMMISSION_STATUSES,
+  DECLINE_REASONS,
+  isPaletteColour,
+  isTerminal,
+  MAX_REVISION,
+} from './commission/types.js';
+export type { CommissionColour, CommissionStatus, DeclineReason } from './commission/types.js';
+
+export { MAX_NOTE_LENGTH, MAX_TEXT_LENGTH, validateBrief } from './commission/brief.js';
+export type { BriefInput, BriefProblem, BriefResult, ValidBrief } from './commission/brief.js';
+
+/** The approval gate, as a table. Nothing reaches production without it. */
+export {
+  allowedNext,
+  canTransition,
+  formatUsdc,
+  occupiesOrderSlot,
+  owesRefund,
+  treasuryShareCents,
+} from './commission/lifecycle.js';
+
+export {
+  balanceReaderFor,
+  checkEligibility,
+  monthStart,
+  nextMonthStart,
+} from './commission/eligibility.js';
+export type {
+  CommissionTerms,
+  EligibilityInput,
+  EligibilityOutcome,
+  EligibilityRefusal,
+} from './commission/eligibility.js';
+
+export { addRevision, placeOrder, transitionCommission } from './commission/order-service.js';
+export type {
+  PlaceOrderOutcome,
+  RevisionOutcome,
+  TransitionOutcome,
+} from './commission/order-service.js';
+
+export {
+  countAcceptedThisMonth,
+  findCommission,
+  findCommissionTerms,
+  findMemberCommissions,
+  findOpenCommission,
+  findOperatorQueue,
+  findWaitlist,
+  joinWaitlist,
+  payablesReport,
+} from './db/commission-repository.js';
+export type {
+  BriefView,
+  CommissionView,
+  PayableLine,
+  PayablesReport,
+} from './db/commission-repository.js';
+
+/** The questionnaire, as a step machine a front end renders but does not decide. */
+export {
+  answer,
+  attachReference,
+  DRAFT_STEPS,
+  finish,
+  promptFor,
+  skip,
+  startDraft,
+  summarise,
+} from './commission/draft.js';
+export type {
+  AnswerResult,
+  CommissionDraft,
+  DraftStep,
+  DraftSummary,
+  FinishResult,
+  Prompt,
+} from './commission/draft.js';
+
+export { createInMemoryDraftStore } from './commission/draft-store.js';
+export type { CommissionDraftStore, DraftStoreOptions } from './commission/draft-store.js';
