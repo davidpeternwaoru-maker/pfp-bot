@@ -1,5 +1,7 @@
-import type { BrowseView, TraitPack } from '../../core/ports.js';
+import type { BrowseView, CommissionStatus, Prompt, TraitPack } from '../../core/ports.js';
+import { DECLINE_REASONS } from '../../core/ports.js';
 import { InlineKeyboard } from 'grammy';
+import { DECLINE_LABELS } from './commission-replies.js';
 import {
   browseAction,
   browsePageAction,
@@ -11,6 +13,19 @@ import {
   REROLL,
   slotAction,
   WALLET_LINK,
+  COMMISSION_ABANDON,
+  COMMISSION_ORDER,
+  COMMISSION_SKIP,
+  COMMISSION_WAITLIST,
+  commissionColourAction,
+  commissionSlotAction,
+  QUEUE_APPROVE,
+  QUEUE_PAID,
+  QUEUE_BACK,
+  QUEUE_DECLINE,
+  QUEUE_NEXT,
+  QUEUE_PRODUCE,
+  queueReasonAction,
 } from './callback-data.js';
 
 /** Beyond this, button labels start truncating on a narrow phone. */
@@ -132,4 +147,89 @@ export function confirmKeyboard(): InlineKeyboard {
  */
 export function walletLinkKeyboard(): InlineKeyboard {
   return new InlineKeyboard().text('Link a wallet', WALLET_LINK);
+}
+
+/**
+ * The questionnaire's buttons for whichever step is showing.
+ *
+ * Every option carries its position in the list this function was handed, so
+ * there is no slot name or colour value in a payload for anybody to rewrite —
+ * the same rule the browse keyboard follows, and it matters more here because
+ * a forged slot would be an order against something the project never offered.
+ */
+export function commissionStepKeyboard(prompt: Prompt): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+
+  if (prompt.step === 'slot' || prompt.step === 'colour') {
+    const action = prompt.step === 'slot' ? commissionSlotAction : commissionColourAction;
+    prompt.options.forEach((option, position) => {
+      keyboard.text(label(option), action(position));
+      if ((position + 1) % OPTIONS_PER_ROW === 0) {
+        keyboard.row();
+      }
+    });
+    if (prompt.options.length % OPTIONS_PER_ROW !== 0) {
+      keyboard.row();
+    }
+  }
+
+  if (prompt.step === 'confirm') {
+    keyboard.text('Place the order', COMMISSION_ORDER).row();
+  }
+
+  // The slot is the one question with no skip: there is no commission without
+  // one, and offering a button that can only be refused is a dead end.
+  if (prompt.step !== 'slot' && prompt.step !== 'confirm') {
+    keyboard.text('Skip', COMMISSION_SKIP).row();
+  }
+
+  keyboard.text('Cancel', COMMISSION_ABANDON);
+  return keyboard;
+}
+
+/** Offered when a month is full, so "come back later" is a tap not a chore. */
+export function waitlistKeyboard(): InlineKeyboard {
+  return new InlineKeyboard().text('Tell me when slots open', COMMISSION_WAITLIST);
+}
+
+/**
+ * What an operator can do to the commission in front of them.
+ *
+ * One tap each. Nothing here opens a text box, because an operator typing to a
+ * member is the thing this whole design exists to prevent.
+ */
+export function queueKeyboard(status: CommissionStatus, hasMore: boolean): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+
+  if (status === 'awaiting_payment') {
+    // Manual confirmation, as the plan specifies at this stage. The operator
+    // checks their wallet and taps; nothing here watches the chain.
+    keyboard.text('Payment received', QUEUE_PAID).row();
+  }
+  if (status === 'awaiting_approval') {
+    keyboard.text('Approve', QUEUE_APPROVE).text('Decline', QUEUE_DECLINE).row();
+  }
+  if (status === 'approved') {
+    keyboard.text('Start drawing', QUEUE_PRODUCE).text('Decline', QUEUE_DECLINE).row();
+  }
+  if (status === 'in_production') {
+    keyboard.text('Decline', QUEUE_DECLINE).row();
+  }
+
+  if (hasMore) {
+    keyboard.text('Next', QUEUE_NEXT);
+  }
+  return keyboard;
+}
+
+/** The fixed decline reasons. The operator picks; they never write. */
+export function declineReasonKeyboard(): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+
+  DECLINE_REASONS.forEach((reason, position) => {
+    keyboard.text(DECLINE_LABELS[reason], queueReasonAction(position)).row();
+  });
+
+  keyboard.text('← Back', QUEUE_BACK);
+  return keyboard;
 }

@@ -17,6 +17,14 @@ import type { BalanceOutcome } from '../wallet/balance.js';
 export interface CommissionTerms {
   readonly enabled: boolean;
   readonly priceUsdcCents: number;
+  /**
+   * Not used by eligibility, and carried here anyway.
+   *
+   * Ordering copies price and share onto the order together, and the two have
+   * to come from the same read — a share fetched separately is a share that
+   * can be fetched from different settings than the price it belongs to.
+   */
+  readonly treasuryShareBps: number;
   readonly monthlyCapacity: number;
   readonly eligibleSlots: readonly string[];
   readonly tokenMint: string | null;

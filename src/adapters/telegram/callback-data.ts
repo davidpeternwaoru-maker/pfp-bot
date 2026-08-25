@@ -22,6 +22,37 @@ export const CONFIRM_CLAIM = 'k';
 export const CANCEL_CLAIM = 'x';
 export const CLOSE_BROWSE = 'q';
 export const WALLET_LINK = 'w';
+
+/**
+ * Commission actions, member side.
+ *
+ * Positions, never values. A slot button carries its index in the project's
+ * eligible list and a colour button its index in the palette, both resolved
+ * server-side against the same lists the server drew — so a forged payload can
+ * only ever pick a different option from a list the member already had open,
+ * and never introduce a slot the project never offered.
+ */
+export const COMMISSION_SKIP = 'mk';
+export const COMMISSION_ORDER = 'mo';
+export const COMMISSION_ABANDON = 'mx';
+export const COMMISSION_WAITLIST = 'mw';
+const COMMISSION_SLOT_PREFIX = 'ms';
+const COMMISSION_COLOUR_PREFIX = 'mc';
+
+/**
+ * Operator queue actions.
+ *
+ * None of these names a commission. Which one is on screen is held in the
+ * operator's own session, so a payload cannot address somebody else's order —
+ * and authorisation still comes from the sender, never from the button.
+ */
+export const QUEUE_PAID = 'np';
+export const QUEUE_APPROVE = 'na';
+export const QUEUE_DECLINE = 'nd';
+export const QUEUE_PRODUCE = 'ns';
+export const QUEUE_NEXT = 'nn';
+export const QUEUE_BACK = 'nb';
+const QUEUE_REASON_PREFIX = 'nr';
 const SLOT_PREFIX = 's';
 const BROWSE_PREFIX = 'b';
 const PAGE_PREFIX = 'p';
@@ -36,6 +67,9 @@ const BROWSE_PATTERN = /^b(\d{1,2})$/;
 const PAGE_PATTERN = /^p(\d{1,3})$/;
 const OPTION_PATTERN = /^o(\d{1,2})$/;
 const COLLECTION_PAGE_PATTERN = /^g(\d{1,3})$/;
+const COMMISSION_SLOT_PATTERN = /^ms(\d{1,2})$/;
+const COMMISSION_COLOUR_PATTERN = /^mc(\d{1,2})$/;
+const QUEUE_REASON_PATTERN = /^nr(\d{1,2})$/;
 
 export type CallbackAction =
   | { readonly kind: 'collection-page'; readonly pageIndex: number }
@@ -48,7 +82,20 @@ export type CallbackAction =
   | { readonly kind: 'browse-page'; readonly pageIndex: number }
   | { readonly kind: 'pick-option'; readonly positionOnPage: number }
   | { readonly kind: 'close-browse' }
-  | { readonly kind: 'wallet-link' };
+  | { readonly kind: 'wallet-link' }
+  | { readonly kind: 'commission-slot'; readonly position: number }
+  | { readonly kind: 'commission-colour'; readonly position: number }
+  | { readonly kind: 'commission-skip' }
+  | { readonly kind: 'commission-order' }
+  | { readonly kind: 'commission-abandon' }
+  | { readonly kind: 'commission-waitlist' }
+  | { readonly kind: 'queue-paid' }
+  | { readonly kind: 'queue-approve' }
+  | { readonly kind: 'queue-decline' }
+  | { readonly kind: 'queue-reason'; readonly position: number }
+  | { readonly kind: 'queue-produce' }
+  | { readonly kind: 'queue-next' }
+  | { readonly kind: 'queue-back' };
 
 export function slotAction(slotIndex: number): string {
   return `${SLOT_PREFIX}${String(slotIndex)}`;
@@ -64,6 +111,18 @@ export function browsePageAction(pageIndex: number): string {
 
 export function optionAction(positionOnPage: number): string {
   return `${OPTION_PREFIX}${String(positionOnPage)}`;
+}
+
+export function commissionSlotAction(position: number): string {
+  return `${COMMISSION_SLOT_PREFIX}${String(position)}`;
+}
+
+export function commissionColourAction(position: number): string {
+  return `${COMMISSION_COLOUR_PREFIX}${String(position)}`;
+}
+
+export function queueReasonAction(position: number): string {
+  return `${QUEUE_REASON_PREFIX}${String(position)}`;
 }
 
 export function collectionPageAction(pageIndex: number): string {
@@ -134,6 +193,55 @@ export function parseCallbackData(
 
   if (raw === WALLET_LINK) {
     return { kind: 'wallet-link' };
+  }
+
+  if (raw === COMMISSION_SKIP) {
+    return { kind: 'commission-skip' };
+  }
+  if (raw === COMMISSION_ORDER) {
+    return { kind: 'commission-order' };
+  }
+  if (raw === COMMISSION_ABANDON) {
+    return { kind: 'commission-abandon' };
+  }
+  if (raw === COMMISSION_WAITLIST) {
+    return { kind: 'commission-waitlist' };
+  }
+
+  if (raw === QUEUE_PAID) {
+    return { kind: 'queue-paid' };
+  }
+  if (raw === QUEUE_APPROVE) {
+    return { kind: 'queue-approve' };
+  }
+  if (raw === QUEUE_DECLINE) {
+    return { kind: 'queue-decline' };
+  }
+  if (raw === QUEUE_PRODUCE) {
+    return { kind: 'queue-produce' };
+  }
+  if (raw === QUEUE_NEXT) {
+    return { kind: 'queue-next' };
+  }
+  if (raw === QUEUE_BACK) {
+    return { kind: 'queue-back' };
+  }
+
+  // Positions again, resolved against what the server last drew. Bounds are
+  // not checked here because this function cannot see those lists.
+  const commissionSlot = indexFrom(COMMISSION_SLOT_PATTERN.exec(raw));
+  if (commissionSlot !== null) {
+    return { kind: 'commission-slot', position: commissionSlot };
+  }
+
+  const commissionColour = indexFrom(COMMISSION_COLOUR_PATTERN.exec(raw));
+  if (commissionColour !== null) {
+    return { kind: 'commission-colour', position: commissionColour };
+  }
+
+  const queueReason = indexFrom(QUEUE_REASON_PATTERN.exec(raw));
+  if (queueReason !== null) {
+    return { kind: 'queue-reason', position: queueReason };
   }
 
   // A slot index addresses the pack, so it is bounds-checked here. A page or a

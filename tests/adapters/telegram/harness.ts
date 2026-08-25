@@ -55,6 +55,20 @@ export interface FakeDatabase {
     number,
     { walletAddress: string | null; walletLinkedAt: Date | null }
   >;
+  /** Commission terms, keyed by project id. Absent means none are sold. */
+  readonly commissionTerms?: ReadonlyMap<number, FakeCommissionTerms>;
+  /** Commissions already accepted this month, keyed by project id. */
+  readonly commissionsThisMonth?: ReadonlyMap<number, number>;
+}
+
+export interface FakeCommissionTerms {
+  readonly enabled: boolean;
+  readonly priceUsdcCents: number;
+  readonly treasuryShareBps: number;
+  readonly monthlyCapacity: number;
+  readonly eligibleSlots: readonly string[];
+  readonly tokenMint: string | null;
+  readonly tokenMinimum: string | null;
 }
 
 /**
@@ -74,14 +88,164 @@ export function fakePrisma(db: FakeDatabase): PrismaClient {
   );
   const challenges: { memberId: number; createdAt: Date }[] = [];
 
+  /**
+   * Commissions this run has created.
+   *
+   * Held here rather than in FakeDatabase because ordering writes: a test that
+   * places an order then asks for its status has to see its own write.
+   */
+  interface FakeCommission {
+    id: number;
+    projectId: number;
+    memberId: number;
+    status: string;
+    priceUsdcCents: number;
+    treasuryShareBps: number;
+    paymentReference: string | null;
+    paidAt: Date | null;
+    declineReason: string | null;
+    deliveredAt: Date | null;
+    createdAt: Date;
+    openOrderKey: string | null;
+    briefs: {
+      revision: number;
+      slot: string;
+      textContent: string | null;
+      colour: string | null;
+      referencePath: string | null;
+      note: string | null;
+    }[];
+  }
+
+  const commissions: FakeCommission[] = [];
+  const waitlist: { projectId: number; memberId: number }[] = [];
+  let nextCommissionId = 1;
+
+  const withProject = (row: FakeCommission): unknown => ({
+    ...row,
+    project: { name: byId.get(row.projectId)?.name ?? 'Project' },
+  });
+
+  const commissionModel = {
+    count: (args: { where: { projectId: number } }) =>
+      Promise.resolve(
+        (db.commissionsThisMonth?.get(args.where.projectId) ?? 0) +
+          commissions.filter(
+            (row) => row.projectId === args.where.projectId && row.status !== 'cancelled',
+          ).length,
+      ),
+    findUnique: (args: {
+      where: {
+        id?: number;
+        projectId_openOrderKey?: { projectId: number; openOrderKey: string };
+      };
+    }) => {
+      const key = args.where.projectId_openOrderKey;
+      const found =
+        key === undefined
+          ? commissions.find((row) => row.id === args.where.id)
+          : commissions.find(
+              (row) => row.projectId === key.projectId && row.openOrderKey === key.openOrderKey,
+            );
+      return Promise.resolve(found === undefined ? null : withProject(found));
+    },
+    findMany: (args: { where?: { memberId?: number; status?: { in?: string[] } } }) => {
+      let rows = [...commissions];
+      if (args.where?.memberId !== undefined) {
+        rows = rows.filter((row) => row.memberId === args.where?.memberId);
+      }
+      const wanted = args.where?.status?.in;
+      if (wanted !== undefined) {
+        rows = rows.filter((row) => wanted.includes(row.status));
+      }
+      return Promise.resolve(rows.map(withProject));
+    },
+    create: (args: {
+      data: {
+        projectId: number;
+        memberId: number;
+        priceUsdcCents: number;
+        treasuryShareBps: number;
+        openOrderKey: string;
+        briefs: { create: FakeCommission['briefs'][number] };
+      };
+    }) => {
+      const clash = commissions.find(
+        (row) =>
+          row.projectId === args.data.projectId && row.openOrderKey === args.data.openOrderKey,
+      );
+      if (clash !== undefined) {
+        // The real one-live-order index, as the code that catches it expects.
+        return Promise.reject(Object.assign(new Error('unique'), { code: 'P2002' }));
+      }
+      const row: FakeCommission = {
+        id: nextCommissionId++,
+        projectId: args.data.projectId,
+        memberId: args.data.memberId,
+        status: 'awaiting_payment',
+        priceUsdcCents: args.data.priceUsdcCents,
+        treasuryShareBps: args.data.treasuryShareBps,
+        paymentReference: null,
+        paidAt: null,
+        declineReason: null,
+        deliveredAt: null,
+        createdAt: new Date(),
+        openOrderKey: args.data.openOrderKey,
+        briefs: [args.data.briefs.create],
+      };
+      commissions.push(row);
+      return Promise.resolve({ id: row.id });
+    },
+    updateMany: (args: {
+      where: { id: number; status: string };
+      data: Record<string, unknown>;
+    }) => {
+      const row = commissions.find(
+        (entry) => entry.id === args.where.id && entry.status === args.where.status,
+      );
+      if (row === undefined) {
+        return Promise.resolve({ count: 0 });
+      }
+      Object.assign(row, args.data);
+      return Promise.resolve({ count: 1 });
+    },
+  };
+
   const stub = {
+    commissionSettings: {
+      findUnique: (args: { where: { projectId: number } }) =>
+        Promise.resolve(db.commissionTerms?.get(args.where.projectId) ?? null),
+    },
+    commission: commissionModel,
+    commissionWaitlist: {
+      upsert: (args: {
+        where: { projectId_memberId: { projectId: number; memberId: number } };
+      }) => {
+        const { projectId, memberId } = args.where.projectId_memberId;
+        if (!waitlist.some((row) => row.projectId === projectId && row.memberId === memberId)) {
+          waitlist.push({ projectId, memberId });
+        }
+        return Promise.resolve({ id: waitlist.length });
+      },
+    },
+    // placeOrder locks the project row and counts inside a transaction. The
+    // fake runs the callback against the same models, which is enough to
+    // exercise the flow — the locking itself is proved against real Postgres.
+    $transaction: (run: (tx: unknown) => Promise<unknown>) => run(stub),
+    $queryRaw: () => Promise.resolve([{ id: 1 }]),
     member: {
       upsert: (args: { where: { platform_externalId: { externalId: string } } }) =>
         Promise.resolve({ id: Number(args.where.platform_externalId.externalId) }),
       findUnique: (args: { where: { id: number } }) =>
-        Promise.resolve(
-          wallets.get(args.where.id) ?? { walletAddress: null, walletLinkedAt: null },
-        ),
+        // Identity as well as wallet state. Commission notifications read
+        // platform and externalId to find the chat, and a fake that returned
+        // only the wallet fields silently swallowed every notification while
+        // the tests still passed.
+        Promise.resolve({
+          ...(wallets.get(args.where.id) ?? { walletAddress: null, walletLinkedAt: null }),
+          platform: 'telegram',
+          externalId: String(args.where.id),
+        }),
       updateMany: (args: { where: { id: number } }) => {
         const held = wallets.get(args.where.id);
         if (held?.walletAddress == null) {
@@ -199,6 +363,8 @@ export interface HarnessOptions {
   readonly renderCache?: RenderCache;
   readonly traitRoot?: string;
   readonly claimRoot?: string;
+  /** Telegram ids allowed to work the commission queue. Empty authorises nobody. */
+  readonly adminIds?: readonly string[];
   readonly publicBaseUrl?: string;
 }
 
@@ -285,6 +451,10 @@ export function createHarness(options: HarnessOptions = {}): Harness {
     // now rather than as it was at the top of the test.
     availability: createAvailability(prisma, { maxAgeMs: 0 }),
     publicBaseUrl: options.publicBaseUrl,
+    adminIds: (options.adminIds ?? []).map((externalId) => ({
+      platform: 'telegram',
+      externalId,
+    })),
     traitRoot: options.traitRoot ?? '.',
     claimRoot: options.claimRoot ?? '.',
     // Silenced: these tests assert on replies, not on log output.

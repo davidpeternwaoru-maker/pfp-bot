@@ -23,10 +23,35 @@ import {
   rollSlotCycle,
   unlinkWallet,
   CHALLENGE_TTL_MS,
+  answer,
+  balanceReaderFor,
+  checkEligibility,
+  countAcceptedThisMonth,
+  createInMemoryDraftStore,
+  DECLINE_REASONS,
+  finish,
+  findCommission,
+  findCommissionTerms,
+  findMemberCommissions,
+  findOpenCommission,
+  findOperatorQueue,
+  joinWaitlist,
+  nextMonthStart,
+  placeOrder,
+  promptFor,
+  skip,
+  startDraft,
+  transitionCommission,
 } from '../../core/ports.js';
 import type {
   Availability,
   ClaimFlowDependencies,
+  CommissionDraft,
+  CommissionDraftStore,
+  CommissionStatus,
+  CommissionView,
+  CommissionTerms,
+  DeclineReason,
   MemberIdentity,
   RateLimiter,
   RenderCache,
@@ -48,7 +73,30 @@ import {
   showClaimed,
 } from './claim-flow.js';
 import { showBrowse, showCombination } from './presenter.js';
-import { walletLinkKeyboard } from './keyboard.js';
+import {
+  commissionStepKeyboard,
+  declineReasonKeyboard,
+  queueKeyboard,
+  waitlistKeyboard,
+  walletLinkKeyboard,
+} from './keyboard.js';
+import {
+  commissionIntro,
+  COMMISSION_NEEDS_PROJECT,
+  commissionStatusReply,
+  eligibilityReply,
+  ORDER_ABANDONED,
+  orderPlaced,
+  QUEUE_EMPTY,
+  QUEUE_NOT_ADMIN,
+  QUEUE_PICK_REASON,
+  queueActionTaken,
+  queueEntry,
+  queueMovedOn,
+  statusNotification,
+  stepPrompt,
+  waitlistJoined,
+} from './commission-replies.js';
 import { createInMemoryMessageBindings } from './message-binding.js';
 import type { MessageBindingStore } from './message-binding.js';
 import {
@@ -102,6 +150,17 @@ export interface BotDependencies {
   readonly publicBaseUrl?: string | undefined;
   readonly traitRoot: string;
   readonly claimRoot: string;
+  /** Where a half-answered questionnaire lives. Defaulted so tests need none. */
+  readonly drafts?: CommissionDraftStore;
+  /**
+   * Who may work the commission queue, as platform-qualified ids.
+   *
+   * Defaults to empty, which authorises nobody. An unset allowlist must mean
+   * no one can approve, never everyone.
+   */
+  readonly adminIds?: readonly { readonly platform: string; readonly externalId: string }[];
+  /** Needed only to check token holdings; absent means no gate can be checked. */
+  readonly solanaRpcUrl?: string | undefined;
   readonly logger: Logger;
   /**
    * Supplying the bot's own identity skips the getMe call grammY would
@@ -157,6 +216,157 @@ export function createBot(deps: BotDependencies): Bot {
 
     await next();
   });
+
+  const drafts = deps.drafts ?? createInMemoryDraftStore();
+  const adminIds = deps.adminIds ?? [];
+
+  /**
+   * Which project a member is answering about, and which commission an
+   * operator has on screen.
+   *
+   * Adapter state, like the message bindings: a button press carries no id, so
+   * the server has to remember what it last drew. Keeping the operator's
+   * position here rather than in the payload is what stops a forged callback
+   * addressing somebody else's order.
+   */
+  const activeDraftProject = new Map<number, number>();
+  const queuePosition = new Map<number, number>();
+
+  const isOperator = (telegramUserId: number): boolean =>
+    adminIds.some(
+      (admin) => admin.platform === 'telegram' && admin.externalId === String(telegramUserId),
+    );
+
+  /** Puts the current question on screen and records what it is about. */
+  const showStep = async (
+    ctx: Context,
+    draft: CommissionDraft,
+    eligibleSlots: readonly string[],
+  ): Promise<void> => {
+    activeDraftProject.set(draft.memberId, draft.projectId);
+    const prompt = promptFor(draft, eligibleSlots);
+    await ctx.reply(stepPrompt(prompt), { reply_markup: commissionStepKeyboard(prompt) });
+  };
+
+  /** The draft a member is part-way through, with its project's terms. */
+  const activeDraft = async (
+    memberId: number,
+  ): Promise<{ draft: CommissionDraft; terms: CommissionTerms } | null> => {
+    const projectId = activeDraftProject.get(memberId);
+    if (projectId === undefined) {
+      return null;
+    }
+    const draft = await drafts.get(memberId, projectId);
+    const terms = await findCommissionTerms(prisma, projectId);
+    if (draft === undefined || terms === null) {
+      return null;
+    }
+    return { draft, terms };
+  };
+
+  /**
+   * Tells a member their order moved.
+   *
+   * Never throws. A notification that cannot be delivered — the member blocked
+   * the bot, say — must not roll back a transition that has already happened,
+   * because the order really did move and the operator was already told so.
+   */
+  const notifyMember = async (view: CommissionView): Promise<void> => {
+    const member = await prisma.member.findUnique({
+      where: { id: view.memberId },
+      select: { platform: true, externalId: true },
+    });
+    if (member === null || member.platform !== 'telegram') {
+      return;
+    }
+    const chatId = Number(member.externalId);
+    if (!Number.isFinite(chatId)) {
+      return;
+    }
+    try {
+      await bot.api.sendMessage(chatId, statusNotification(view));
+    } catch (error) {
+      logger.warn('commission.notify_failed', {
+        commissionId: view.id,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  /** Draws the commission an operator is looking at, with its one-tap actions. */
+  const showQueueEntry = async (ctx: Context, telegramUserId: number): Promise<void> => {
+    const queue = await findOperatorQueue(prisma);
+    if (queue.length === 0) {
+      queuePosition.delete(telegramUserId);
+      await ctx.reply(QUEUE_EMPTY);
+      return;
+    }
+
+    const current = queuePosition.get(telegramUserId);
+    const index = Math.max(
+      0,
+      queue.findIndex((entry) => entry.id === current),
+    );
+    const entry = queue[index];
+    if (entry === undefined) {
+      await ctx.reply(QUEUE_EMPTY);
+      return;
+    }
+
+    queuePosition.set(telegramUserId, entry.id);
+    await ctx.reply(queueEntry(entry, index, queue.length), {
+      reply_markup: queueKeyboard(entry.status, queue.length > 1),
+    });
+  };
+
+  /** Moves the commission on screen, then tells the member. */
+  const actOnQueue = async (
+    ctx: Context,
+    telegramUserId: number,
+    to: CommissionStatus,
+    declineReason?: DeclineReason,
+  ): Promise<void> => {
+    const commissionId = queuePosition.get(telegramUserId);
+    if (commissionId === undefined) {
+      await ctx.reply(QUEUE_EMPTY);
+      return;
+    }
+
+    const before = await findCommission(prisma, commissionId);
+    if (before === null) {
+      await ctx.reply(queueMovedOn(null));
+      return;
+    }
+
+    const moved = await transitionCommission({
+      prisma,
+      commissionId,
+      from: before.status,
+      to,
+      ...(declineReason === undefined ? {} : { declineReason }),
+    });
+
+    if (moved.kind !== 'moved') {
+      // Somebody else acted first, or the move was never legal. Either way the
+      // operator is told rather than left believing they changed something.
+      await ctx.reply(
+        moved.kind === 'stale' ? queueMovedOn(moved.actual) : queueMovedOn(before.status),
+      );
+      await showQueueEntry(ctx, telegramUserId);
+      return;
+    }
+
+    const after = await findCommission(prisma, commissionId);
+    if (after !== null) {
+      logger.info('commission.moved', { commissionId, to });
+      await ctx.reply(queueActionTaken(after));
+      await notifyMember(after);
+    }
+
+    // A finished commission leaves the queue, so the operator is moved off it.
+    queuePosition.delete(telegramUserId);
+    await showQueueEntry(ctx, telegramUserId);
+  };
 
   bot.command('start', async (ctx) => {
     const from = ctx.from;
@@ -371,6 +581,162 @@ export function createBot(deps: BotDependencies): Bot {
     await startWalletLink(ctx, member.id, log);
   });
 
+  /**
+   * Ordering personalised artwork, and checking on one already ordered.
+   *
+   * One command for both, because a member who has ordered does not want a
+   * different verb to ask where theirs is — and an order that goes silent is
+   * the failure this whole flow is designed around.
+   */
+  bot.command('commission', async (ctx) => {
+    const from = ctx.from;
+    if (from === undefined) {
+      return;
+    }
+
+    const member = await resolveMember(prisma, telegramIdentity(from));
+    const log = logger.child({ memberId: member.id });
+
+    const argument = ctx.match.trim();
+    if (argument.length === 0) {
+      const held = await findMemberCommissions(prisma, member.id);
+      await ctx.reply(
+        held.length === 0
+          ? COMMISSION_NEEDS_PROJECT
+          : commissionStatusReply(held[0] as CommissionView),
+      );
+      return;
+    }
+
+    // Same validation as a deep link payload: attacker-controlled either way.
+    const payload = parseStartPayload(argument);
+    if (!payload.ok) {
+      await ctx.reply(entryReply({ kind: 'unknown-project' }));
+      return;
+    }
+
+    const project = await findProjectBySlug(prisma, payload.slug);
+    if (project === null) {
+      await ctx.reply(entryReply({ kind: 'unknown-project' }));
+      return;
+    }
+
+    // An order already in flight is what they came to ask about.
+    const open = await findOpenCommission(prisma, project.id, member.id);
+    if (open !== null) {
+      await ctx.reply(commissionStatusReply(open));
+      return;
+    }
+
+    const terms = await findCommissionTerms(prisma, project.id);
+    if (terms === null) {
+      await ctx.reply(eligibilityReply({ kind: 'disabled' }, project.name));
+      return;
+    }
+
+    // A half-answered questionnaire resumes exactly where it stopped, rather
+    // than starting them over on questions they have already answered.
+    const resumed = await drafts.get(member.id, project.id);
+    if (resumed !== undefined) {
+      await showStep(ctx, resumed, terms.eligibleSlots);
+      return;
+    }
+
+    const wallet = await findLinkedWallet(prisma, member.id);
+    const outcome = await checkEligibility({
+      terms,
+      acceptedThisMonth: await countAcceptedThisMonth(prisma, project.id),
+      hasOpenOrder: false,
+      walletAddress: wallet?.address ?? null,
+      now: new Date(),
+      ...(deps.solanaRpcUrl === undefined
+        ? {}
+        : { readBalance: balanceReaderFor(deps.solanaRpcUrl) }),
+    });
+
+    if (outcome.kind === 'refused') {
+      log.info('commission.refused', { reason: outcome.refusal.kind, projectId: project.id });
+      // A full month is the one refusal with something to offer, so it is the
+      // one that comes with a button.
+      await ctx.reply(
+        eligibilityReply(outcome.refusal, project.name),
+        outcome.refusal.kind === 'at-capacity' ? { reply_markup: waitlistKeyboard() } : {},
+      );
+      if (outcome.refusal.kind === 'at-capacity') {
+        activeDraftProject.set(member.id, project.id);
+      }
+      return;
+    }
+
+    await ctx.reply(commissionIntro(project.name, terms.priceUsdcCents));
+    const draft = startDraft(member.id, project.id);
+    await drafts.set(draft);
+    await showStep(ctx, draft, terms.eligibleSlots);
+  });
+
+  /**
+   * The operator queue.
+   *
+   * Everything here is one tap. Nothing opens a text box, because an operator
+   * writing to a member is precisely what this design exists to prevent.
+   */
+  bot.command('queue', async (ctx) => {
+    const from = ctx.from;
+    if (from === undefined) {
+      return;
+    }
+
+    // Fail closed, and before anything is read. An empty allowlist authorises
+    // nobody, and the refusal says nothing about what is in the queue.
+    if (!isOperator(from.id)) {
+      logger.warn('queue.refused', { telegramUserId: from.id });
+      await ctx.reply(QUEUE_NOT_ADMIN);
+      return;
+    }
+
+    queuePosition.delete(from.id);
+    await showQueueEntry(ctx, from.id);
+  });
+
+  /**
+   * Typed answers to the questionnaire.
+   *
+   * Registered after every command, so a slash command is never swallowed by
+   * a half-finished brief. A member with no draft open is not answering
+   * anything, and their message is left alone.
+   */
+  bot.on('message:text', async (ctx) => {
+    const from = ctx.from;
+    if (from === undefined || ctx.message.text.startsWith('/')) {
+      return;
+    }
+
+    const member = await resolveMember(prisma, telegramIdentity(from));
+    const active = await activeDraft(member.id);
+    if (active === null) {
+      return;
+    }
+
+    const { draft, terms } = active;
+    // Only two questions take typed input. Anything typed at the others is
+    // ignored rather than guessed at.
+    if (draft.step !== 'text' && draft.step !== 'note') {
+      return;
+    }
+
+    const result = answer(draft, ctx.message.text, terms.eligibleSlots);
+    if (!result.ok) {
+      // Corrected at the point of entry, with the question still in front of
+      // them, rather than at the end when they have forgotten what they said.
+      await ctx.reply(result.problem.message);
+      await showStep(ctx, draft, terms.eligibleSlots);
+      return;
+    }
+
+    await drafts.set(result.draft);
+    await showStep(ctx, result.draft, terms.eligibleSlots);
+  });
+
   /** Every claim the member holds, across every collection. */
   bot.command('collection', async (ctx) => {
     const from = ctx.from;
@@ -431,6 +797,190 @@ export function createBot(deps: BotDependencies): Bot {
     if (ctx.callbackQuery.data === WALLET_LINK) {
       await startWalletLink(ctx, member.id, log);
       return;
+    }
+
+    // Commission and queue buttons belong to messages with no roll behind
+    // them, so they are handled before any session lookup — exactly as
+    // collection paging and wallet linking are.
+    const commissionAction = parseCallbackData(ctx.callbackQuery.data, 0);
+
+    if (commissionAction !== null && commissionAction.kind.startsWith('queue-')) {
+      // Authorisation comes from the sender, never from the payload. A forged
+      // queue button from a non-operator is refused here.
+      if (!isOperator(from.id)) {
+        logger.warn('queue.callback_refused', { telegramUserId: from.id });
+        await ctx.reply(QUEUE_NOT_ADMIN);
+        return;
+      }
+
+      switch (commissionAction.kind) {
+        case 'queue-paid':
+          await actOnQueue(ctx, from.id, 'awaiting_approval');
+          return;
+
+        case 'queue-approve':
+          await actOnQueue(ctx, from.id, 'approved');
+          return;
+
+        case 'queue-produce':
+          await actOnQueue(ctx, from.id, 'in_production');
+          return;
+
+        case 'queue-decline':
+          // A reason is always chosen, never typed, and never skipped: the
+          // member's explanation is generated from it.
+          await ctx.reply(QUEUE_PICK_REASON, { reply_markup: declineReasonKeyboard() });
+          return;
+
+        case 'queue-reason': {
+          const reason = DECLINE_REASONS[commissionAction.position];
+          if (reason === undefined) {
+            log.warn('queue.reason_off_list');
+            return;
+          }
+          await actOnQueue(ctx, from.id, 'declined', reason);
+          return;
+        }
+
+        case 'queue-next': {
+          const queue = await findOperatorQueue(prisma);
+          const current = queuePosition.get(from.id);
+          const index = queue.findIndex((entry) => entry.id === current);
+          // Wraps rather than stopping: an operator reaching the end should
+          // come back round, not find a button that does nothing.
+          const next = queue[(index + 1) % Math.max(1, queue.length)];
+          if (next !== undefined) {
+            queuePosition.set(from.id, next.id);
+          }
+          await showQueueEntry(ctx, from.id);
+          return;
+        }
+
+        case 'queue-back':
+          await showQueueEntry(ctx, from.id);
+          return;
+
+        default:
+          return;
+      }
+    }
+
+    if (commissionAction !== null && commissionAction.kind.startsWith('commission-')) {
+      const active = await activeDraft(member.id);
+
+      if (commissionAction.kind === 'commission-waitlist') {
+        const projectId = activeDraftProject.get(member.id);
+        if (projectId === undefined) {
+          await ctx.reply(COMMISSION_NEEDS_PROJECT);
+          return;
+        }
+        await joinWaitlist(prisma, projectId, member.id);
+        log.info('commission.waitlisted', { projectId });
+        await ctx.reply(waitlistJoined(nextMonthStart(new Date())));
+        return;
+      }
+
+      if (active === null) {
+        // Their answers expired or were cleared. Nothing is lost that was
+        // ever ordered, so this is a restart rather than an error.
+        await ctx.reply(COMMISSION_NEEDS_PROJECT);
+        return;
+      }
+
+      const { draft, terms } = active;
+
+      switch (commissionAction.kind) {
+        case 'commission-abandon':
+          await drafts.clear(member.id, draft.projectId);
+          activeDraftProject.delete(member.id);
+          await ctx.reply(ORDER_ABANDONED);
+          return;
+
+        case 'commission-skip': {
+          const skipped = skip(draft);
+          if (!skipped.ok) {
+            await ctx.reply(skipped.problem.message);
+            await showStep(ctx, draft, terms.eligibleSlots);
+            return;
+          }
+          await drafts.set(skipped.draft);
+          await showStep(ctx, skipped.draft, terms.eligibleSlots);
+          return;
+        }
+
+        case 'commission-slot':
+        case 'commission-colour': {
+          // A position into the list the server itself drew. Resolving it here
+          // is what keeps slot names and colour values out of the payload.
+          const prompt = promptFor(draft, terms.eligibleSlots);
+          const options = prompt.step === 'slot' || prompt.step === 'colour' ? prompt.options : [];
+          const chosen = options[commissionAction.position];
+
+          if (chosen === undefined) {
+            log.warn('commission.option_off_list');
+            return;
+          }
+
+          const answered = answer(draft, chosen, terms.eligibleSlots);
+          if (!answered.ok) {
+            await ctx.reply(answered.problem.message);
+            await showStep(ctx, draft, terms.eligibleSlots);
+            return;
+          }
+          await drafts.set(answered.draft);
+          await showStep(ctx, answered.draft, terms.eligibleSlots);
+          return;
+        }
+
+        case 'commission-order': {
+          // Re-validated against the project's current terms, because the
+          // eligible slots can change while somebody is answering.
+          const finished = finish(draft, terms.eligibleSlots);
+          if (!finished.ok) {
+            await ctx.reply(finished.problems.map((problem) => problem.message).join('\n'));
+            return;
+          }
+
+          const placed = await placeOrder({
+            prisma,
+            projectId: draft.projectId,
+            memberId: member.id,
+            brief: finished.brief,
+            priceUsdcCents: terms.priceUsdcCents,
+            treasuryShareBps: terms.treasuryShareBps,
+            monthlyCapacity: terms.monthlyCapacity,
+          });
+
+          if (placed.kind === 'ordered') {
+            await drafts.clear(member.id, draft.projectId);
+            activeDraftProject.delete(member.id);
+            log.info('commission.ordered', { commissionId: placed.commissionId });
+            await ctx.reply(orderPlaced(terms.priceUsdcCents));
+            return;
+          }
+
+          // The month filled, or they already have one, while they answered.
+          // Their answers are kept either way — nothing they typed is lost.
+          const refusal =
+            placed.kind === 'already-ordered'
+              ? ({ kind: 'already-ordered' } as const)
+              : ({
+                  kind: 'at-capacity',
+                  capacity: terms.monthlyCapacity,
+                  reopensAt: nextMonthStart(new Date()),
+                } as const);
+
+          const project = await findProjectById(prisma, draft.projectId);
+          await ctx.reply(
+            eligibilityReply(refusal, project?.name ?? 'this collection'),
+            placed.kind === 'at-capacity' ? { reply_markup: waitlistKeyboard() } : {},
+          );
+          return;
+        }
+
+        default:
+          return;
+      }
     }
 
     // The message identifies which project is on screen, and core holds what

@@ -32,6 +32,7 @@ const SLOTS = ['hat', 'eyes'] as const;
 const TERMS: CommissionTerms = {
   enabled: true,
   priceUsdcCents: 5_000,
+  treasuryShareBps: 1_250,
   monthlyCapacity: 10,
   eligibleSlots: SLOTS,
   tokenMint: null,

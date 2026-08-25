@@ -22,6 +22,7 @@ export async function findCommissionTerms(
     select: {
       enabled: true,
       priceUsdcCents: true,
+      treasuryShareBps: true,
       monthlyCapacity: true,
       eligibleSlots: true,
       tokenMint: true,
@@ -168,7 +169,11 @@ export async function findOperatorQueue(
 ): Promise<readonly CommissionView[]> {
   const rows = await prisma.commission.findMany({
     where: {
-      status: { in: ['awaiting_approval', 'approved', 'in_production'] },
+      // Awaiting payment is included because confirming USDC arrived is an
+      // operator action too. Leaving it out would mean nothing ever reached
+      // the queue at all — an order would sit unpaid forever with no button
+      // anywhere able to move it.
+      status: { in: ['awaiting_payment', 'awaiting_approval', 'approved', 'in_production'] },
       ...(projectId === undefined ? {} : { projectId }),
     },
     orderBy: { createdAt: 'asc' },

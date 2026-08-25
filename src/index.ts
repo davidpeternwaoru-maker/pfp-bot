@@ -4,6 +4,7 @@ import { createRateLimiter } from './core/rate-limit.js';
 import { createInMemorySessionStore } from './core/session.js';
 import { createRenderCache } from './core/render/cache.js';
 import { createAvailability } from './core/roll/availability.js';
+import { createInMemoryDraftStore } from './core/commission/draft-store.js';
 import type { Env } from './config/env.js';
 import { EnvValidationError, loadEnv } from './config/env.js';
 import { createPrismaClient } from './core/db/client.js';
@@ -39,6 +40,9 @@ const renderCache = createRenderCache();
 // Answers what a caption says about a combination being free. Never what a
 // claim is allowed to do: that is a unique index, and it is not cached.
 const availability = createAvailability(prisma);
+// Half-answered commission briefs. In memory: no order exists until the
+// questionnaire finishes, so a restart costs answers rather than money.
+const drafts = createInMemoryDraftStore();
 
 const bot = createBot({
   token: env.TELEGRAM_BOT_TOKEN,
@@ -47,6 +51,10 @@ const bot = createBot({
   rateLimiter,
   renderCache,
   availability,
+  drafts,
+  // The same allowlist that authorises an award. Empty authorises nobody.
+  adminIds: env.ADMIN_IDS,
+  solanaRpcUrl: env.SOLANA_RPC_URL,
   publicBaseUrl: env.PUBLIC_BASE_URL,
   traitRoot: env.TRAIT_ROOT,
   claimRoot: env.CLAIM_ROOT,

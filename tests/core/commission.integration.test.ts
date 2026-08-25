@@ -348,9 +348,11 @@ describe.skipIf(DATABASE_URL === undefined)('what the operator sees and is owed'
     }
     const commissionId = placed.commissionId;
 
-    // Not yet paid, so not yet the operator's problem.
+    // Unpaid orders are the operator's problem too: confirming that USDC
+    // arrived is a tap only they can make, so an order left out of the queue
+    // here would sit unpaid forever with nothing anywhere able to move it.
     let queue = await findOperatorQueue(prisma, projectId);
-    expect(queue.some((entry) => entry.id === commissionId)).toBe(false);
+    expect(queue.some((entry) => entry.id === commissionId)).toBe(true);
 
     await transitionCommission({
       prisma,
