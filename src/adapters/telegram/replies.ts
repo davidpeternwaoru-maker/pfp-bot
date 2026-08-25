@@ -1,6 +1,8 @@
 import type {
   BrowseView,
   CollisionAdvice,
+  GroupEligibilityRefusal,
+  VerificationOutcome,
   EntryOutcome,
   TraitRecord,
   TraitTier,
@@ -269,4 +271,93 @@ export const WALLET_NOTHING_TO_UNLINK =
 export function walletRateLimited(retryAfterSeconds: number): string {
   const minutes = Math.ceil(retryAfterSeconds / 60);
   return `That is a lot of link attempts. Try again in ${String(minutes)} minute${minutes === 1 ? '' : 's'}.`;
+}
+
+// ---------------------------------------------------------------------------
+// Public verification, and who may roll
+// ---------------------------------------------------------------------------
+
+export const VERIFY_NEEDS_USERNAME =
+  'Send /verify followed by a username, for example /verify @someone.';
+
+export const VERIFY_NOT_A_GROUP =
+  'Use /verify in a collection’s group chat, where everyone can see the answer.';
+
+export const VERIFY_NO_PROJECT =
+  'This group is not linked to a collection, so there is nothing to verify against.';
+
+export function verifyRateLimited(retryAfterSeconds: number): string {
+  return `That has been asked a lot just now. Try again in ${String(retryAfterSeconds)}s.`;
+}
+
+/**
+ * The public answer.
+ *
+ * Says what somebody holds and nothing else. No wallet address, no internal
+ * id, no join date — and the lookup does not read those columns at all, so
+ * there is nothing here to leak by editing this function carelessly.
+ */
+export function verificationReply(outcome: VerificationOutcome, projectName: string): string {
+  switch (outcome.kind) {
+    case 'holds': {
+      const lines = outcome.claims.map((claim) => {
+        const badge = claim.tier === 'open' ? '' : ` (${claim.tier})`;
+        return `  #${String(claim.editionNumber)}${badge} — claimed ${claim.claimedAt.toISOString().slice(0, 10)}`;
+      });
+      const count = outcome.claims.length;
+      return [
+        `@${outcome.handle} holds ${String(count)} ${count === 1 ? 'piece' : 'pieces'} in ${projectName}:`,
+        ...lines,
+      ].join('\n');
+    }
+
+    case 'holds-none':
+      return `@${outcome.handle} does not hold anything in ${projectName}.`;
+
+    case 'unknown-member':
+      // Deliberately the same shape of answer. Whether somebody has ever used
+      // the bot is not a fact this command should broadcast to a group.
+      return `@${outcome.handle} does not hold anything in ${projectName}.`;
+  }
+}
+
+/**
+ * Why somebody may not roll, and what to do about it.
+ *
+ * Never a bare rejection. A member turned away needs to know the requirement
+ * and the next step, or the drop looks broken rather than gated.
+ */
+export function eligibilityRefusalReply(
+  refusal: GroupEligibilityRefusal,
+  projectName: string,
+): string {
+  switch (refusal.kind) {
+    case 'must-join':
+      return [
+        `${projectName} is open to members of its community group.`,
+        '',
+        'Join the group, then open this link again. Nothing is lost — your',
+        'place is not held or queued, so come straight back.',
+      ].join('\n');
+
+    case 'too-new':
+      return [
+        `${projectName} is open to members who have been in its group for at least ${String(refusal.minimumDays)} days.`,
+        '',
+        refusal.heldDays === 0
+          ? 'You are counted from today.'
+          : `You are counted from ${String(refusal.heldDays)} ${refusal.heldDays === 1 ? 'day' : 'days'} ago.`,
+        `You can roll from ${refusal.eligibleAt.toISOString().slice(0, 10)}.`,
+      ].join('\n');
+
+    case 'unverifiable':
+      // Never "you do not qualify": that would send somebody joining a group
+      // they may already be in, or waiting out a period they have served.
+      return [
+        `I could not check whether you can roll in ${projectName} just now.`,
+        '',
+        'This is a problem on our side, not yours. Try the link again in a few',
+        'minutes.',
+      ].join('\n');
+  }
 }

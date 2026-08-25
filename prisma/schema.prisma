@@ -122,6 +122,7 @@ model Project {
   commissionSettings CommissionSettings?
   commissions        Commission[]
   commissionWaitlist CommissionWaitlist[]
+  groupMemberships   GroupMembership[]
 }
 
 /// One artwork layer option, e.g. slot "eyes", name "visor".
@@ -189,6 +190,7 @@ model Member {
   challenges         WalletChallenge[]
   commissions        Commission[]
   commissionWaitlist CommissionWaitlist[]
+  groupMemberships   GroupMembership[]
 
   // One row per identity per platform. The same person arriving through two
   // front ends is two members until something deliberately links them, which
@@ -431,4 +433,34 @@ model CommissionWaitlist {
 
   @@unique([projectId, memberId])
   @@index([projectId, notifiedAt])
+}
+
+/// When this project first confirmed a member was in its group.
+///
+/// Exists because Telegram will not tell us. getChatMember reports whether
+/// somebody is in a chat right now, and never when they joined — so a tenure
+/// rule has nothing to measure against unless we record what we observe.
+///
+/// `knownSince` is therefore "first confirmed present", not "joined". For
+/// anybody already in the group when this project started checking, the two
+/// differ, and the difference is always in the member's disfavour. That is the
+/// honest direction for it to be wrong in, and it is written down here so
+/// nobody later mistakes this column for a join date.
+model GroupMembership {
+  id        Int @id @default(autoincrement())
+  projectId Int
+  memberId  Int
+
+  /// Set once and never moved forward. Tenure that reset on every check would
+  /// mean nobody ever accrued any.
+  knownSince DateTime @default(now())
+  /// Refreshed on every confirmation, for an operator wondering how stale a
+  /// record is. Nothing is decided from it.
+  lastSeenAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  member  Member  @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, memberId])
+  @@index([projectId])
 }

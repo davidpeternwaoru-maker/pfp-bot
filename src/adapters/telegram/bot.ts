@@ -43,6 +43,14 @@ import {
   startDraft,
   transitionCommission,
   attachReference,
+  createRateLimiter,
+  decideEligibility,
+  findKnownSince,
+  findProjectByGroup,
+  parseEligibilityRule,
+  recordGroupMembership,
+  ruleGroupId,
+  verifyHolder,
   addRevision,
   deliverCommission,
   MAX_REVISION,
@@ -50,6 +58,7 @@ import {
 } from '../../core/ports.js';
 import type {
   Availability,
+  MembershipFact,
   ClaimFlowDependencies,
   CommissionDraft,
   CommissionDraftStore,
@@ -130,6 +139,12 @@ import {
   ROLL_SLOT_STUCK,
   ROLL_STALE,
   ROLL_UNDETERMINED,
+  eligibilityRefusalReply,
+  verificationReply,
+  VERIFY_NEEDS_USERNAME,
+  VERIFY_NO_PROJECT,
+  VERIFY_NOT_A_GROUP,
+  verifyRateLimited,
   WALLET_DISABLED,
   WALLET_NONE_LINKED,
   WALLET_NOTHING_TO_UNLINK,
@@ -167,6 +182,8 @@ export interface BotDependencies {
   readonly claimRoot: string;
   /** Where a half-answered questionnaire lives. Defaulted so tests need none. */
   readonly drafts?: CommissionDraftStore;
+  /** Throttles /verify per group. Defaulted; injected only by tests. */
+  readonly verifyLimiter?: RateLimiter;
   /**
    * Who may work the commission queue, as platform-qualified ids.
    *
@@ -247,6 +264,16 @@ export function createBot(deps: BotDependencies): Bot {
     registered.add(name);
     bot.command(name, handler);
   };
+
+  /**
+   * Verification, throttled per group rather than per person.
+   *
+   * The command is public and answers about anybody, so the cost of abusing it
+   * is spread across a room. Limiting by sender would let ten people in one
+   * group take turns hammering it; limiting by group is what actually bounds
+   * the work.
+   */
+  const verifyLimiter = deps.verifyLimiter ?? createRateLimiter({ limit: 10, windowMs: 60_000 });
 
   const drafts = deps.drafts ?? createInMemoryDraftStore();
   const adminIds = deps.adminIds ?? [];
@@ -449,6 +476,29 @@ export function createBot(deps: BotDependencies): Bot {
 
     if (outcome.kind !== 'ready') {
       await ctx.reply(entryReply(outcome));
+      return;
+    }
+
+    // The project's own rule, checked at the first attempt to roll rather than
+    // at the claim. Somebody who cannot roll should be told before they pick
+    // out a combination they were never going to be allowed to keep.
+    //
+    // Deliberately after the already-claimed branch above: a member who
+    // already holds one must always be able to see it, even if they have since
+    // left the group the rule names.
+    const eligible = await checkEligibleToRoll(
+      outcome.projectId,
+      member.id,
+      from.id,
+      project?.eligibilityRule,
+    );
+
+    if (eligible.kind === 'refused') {
+      log.info('start.not_eligible', {
+        projectId: outcome.projectId,
+        reason: eligible.refusal.kind,
+      });
+      await ctx.reply(eligibilityRefusalReply(eligible.refusal, outcome.projectName));
       return;
     }
 
@@ -769,15 +819,30 @@ export function createBot(deps: BotDependencies): Bot {
    * a half-finished brief. A member with no draft open is not answering
    * anything, and their message is left alone.
    */
-  bot.on('message:text', async (ctx) => {
+  /**
+   * Typed answers to the questionnaire.
+   *
+   * Every path that does not handle the message calls next(), and that is
+   * load-bearing rather than tidy: middleware which returns without it ends
+   * the chain, so anything registered after this would never run. An earlier
+   * version returned bare, and it silently killed /collection — registered
+   * below — for an entire phase. The tests did not notice because they
+   * exercised the paging functions directly and never sent the command.
+   *
+   * Passing the message on means registration order stops mattering, which is
+   * the only version of this that stays correct as handlers are added.
+   */
+  bot.on('message:text', async (ctx, next) => {
     const from = ctx.from;
     if (from === undefined || ctx.message.text.startsWith('/')) {
+      await next();
       return;
     }
 
     const member = await resolveMember(prisma, telegramIdentity(from));
     const active = await activeDraft(member.id);
     if (active === null) {
+      await next();
       return;
     }
 
@@ -785,6 +850,7 @@ export function createBot(deps: BotDependencies): Bot {
     // Only two questions take typed input. Anything typed at the others is
     // ignored rather than guessed at.
     if (draft.step !== 'text' && draft.step !== 'note') {
+      await next();
       return;
     }
 
@@ -809,9 +875,10 @@ export function createBot(deps: BotDependencies): Bot {
    * checked against their own header, the size against what actually arrives,
    * and the stored name is generated rather than taken from anything sent.
    */
-  bot.on(['message:photo', 'message:document'], async (ctx) => {
+  bot.on(['message:photo', 'message:document'], async (ctx, next) => {
     const from = ctx.from;
     if (from === undefined) {
+      await next();
       return;
     }
 
@@ -819,6 +886,7 @@ export function createBot(deps: BotDependencies): Bot {
     const document = ctx.message.document;
     const fileId = photo?.file_id ?? document?.file_id;
     if (fileId === undefined) {
+      await next();
       return;
     }
 
@@ -830,6 +898,7 @@ export function createBot(deps: BotDependencies): Bot {
 
     // Nobody asked this sender for a file. Ignored rather than guessed at.
     if (deliveringFor === undefined && active === null) {
+      await next();
       return;
     }
 
@@ -909,6 +978,123 @@ export function createBot(deps: BotDependencies): Bot {
       await ctx.reply(REFERENCE_SAVED);
       await showStep(ctx, withReference, active.terms.eligibleSlots);
     }
+  });
+
+  /**
+   * Whether this member may roll in this project.
+   *
+   * The rule is the project's; establishing the fact it needs is Telegram's
+   * job, and that is the whole split. Anything that is not a definite yes
+   * refuses — a gate that opened when getChatMember failed would open exactly
+   * when something was wrong.
+   */
+  const checkEligibleToRoll = async (
+    projectId: number,
+    memberId: number,
+    telegramUserId: number,
+    storedRule: unknown,
+  ): Promise<ReturnType<typeof decideEligibility>> => {
+    const rule = parseEligibilityRule(storedRule);
+    const groupId = ruleGroupId(rule);
+
+    // Nothing to ask about. Decided without a round trip.
+    if (rule !== null && groupId === null) {
+      return decideEligibility(rule, { kind: 'unknown' }, new Date());
+    }
+
+    let fact: MembershipFact = { kind: 'unknown' };
+
+    if (groupId !== null) {
+      const chatId = Number(groupId);
+      if (!Number.isSafeInteger(chatId)) {
+        // A rule naming a group this front end cannot address is a rule it
+        // cannot enforce, and an unenforceable gate must not be an open one.
+        logger.warn('eligibility.group_not_telegram', { projectId });
+      } else {
+        try {
+          const status = (await bot.api.getChatMember(chatId, telegramUserId)).status;
+          const present =
+            status === 'creator' ||
+            status === 'administrator' ||
+            status === 'member' ||
+            status === 'restricted';
+
+          if (present) {
+            // Recorded on the way past, which is what gives tenure anything
+            // to measure. Set once; never moved forward.
+            const knownSince = await recordGroupMembership(prisma, projectId, memberId);
+            fact = { kind: 'member', knownSince };
+          } else {
+            fact = { kind: 'not-member' };
+          }
+        } catch (error) {
+          // The bot is not in the group, or Telegram is unhappy. Either way
+          // this is "could not check", which refuses.
+          logger.warn('eligibility.check_failed', {
+            projectId,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+          fact = { kind: 'unknown' };
+        }
+      }
+    }
+
+    // A member already recorded keeps their tenure even if this particular
+    // check could not confirm them again.
+    if (fact.kind === 'member' && fact.knownSince === null) {
+      fact = { kind: 'member', knownSince: await findKnownSince(prisma, projectId, memberId) };
+    }
+
+    return decideEligibility(rule, fact, new Date());
+  };
+
+  /**
+   * Says publicly what somebody holds.
+   *
+   * Runs in a project's group, where the answer is meant to be readable by
+   * everybody — that is the point of it. It reads no wallet address, and the
+   * lookup does not select one, so there is nothing here to leak.
+   *
+   * Entirely independent of channel gating: a project with no channel
+   * configured verifies exactly the same way.
+   */
+  command('verify', async (ctx) => {
+    const from = ctx.from;
+    const chat = ctx.chat;
+    if (from === undefined || chat === undefined) {
+      return;
+    }
+
+    // Group only. In a private chat there is no project bound to the room and
+    // no community to read the answer.
+    if (chat.type !== 'group' && chat.type !== 'supergroup') {
+      await ctx.reply(VERIFY_NOT_A_GROUP);
+      return;
+    }
+
+    const decision = verifyLimiter.check(String(chat.id));
+    if (!decision.allowed) {
+      logger.info('verify.rate_limited', { chatId: chat.id });
+      await ctx.reply(verifyRateLimited(decision.retryAfterSeconds));
+      return;
+    }
+
+    const project = await findProjectByGroup(prisma, String(chat.id));
+    if (project === null) {
+      await ctx.reply(VERIFY_NO_PROJECT);
+      return;
+    }
+
+    const handle = normaliseUsername(ctx.match.trim().replace(/^@/, ''));
+    if (handle === null) {
+      await ctx.reply(VERIFY_NEEDS_USERNAME);
+      return;
+    }
+
+    const outcome = await verifyHolder(prisma, project.id, 'telegram', handle);
+    logger.info('verify.answered', { projectId: project.id, outcome: outcome.kind });
+
+    await ctx.reply(verificationReply(outcome, project.name));
   });
 
   /** Every claim the member holds, across every collection. */

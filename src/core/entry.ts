@@ -11,6 +11,15 @@ export interface EntryProject {
   readonly status: ProjectStatus;
   readonly claimOpensAt: Date | null;
   readonly claimClosesAt: Date | null;
+  /**
+   * The project's own rule about who may roll, as stored.
+   *
+   * Unknown rather than a parsed type: it is JSON from a column, and parsing
+   * it is the eligibility module's job. resolveEntry does not read it — the
+   * window and the existing claim are decided without a network, and the rule
+   * needs one — so it is carried through rather than acted on here.
+   */
+  readonly eligibilityRule?: unknown;
 }
 
 export interface EntryExistingClaim {

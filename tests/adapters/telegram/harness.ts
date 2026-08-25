@@ -55,6 +55,27 @@ export interface FakeDatabase {
     number,
     { walletAddress: string | null; walletLinkedAt: Date | null }
   >;
+  /**
+   * Which project a group chat belongs to, if any.
+   *
+   * Explicitly nullable so a test can pass undefined to mean "this group is
+   * bound to nothing", which is a case worth covering rather than one to be
+   * expressed by leaving the key out of a spread.
+   */
+  readonly groupBinding?:
+    | {
+        readonly groupId: string;
+        readonly projectId: number;
+        readonly name: string;
+      }
+    | undefined;
+  /** The stored eligibility rule, as it would come out of the JSON column. */
+  readonly eligibilityRule?: unknown;
+  /** Claims to report for /verify, keyed by member id. */
+  readonly claimsByMember?: ReadonlyMap<
+    number,
+    readonly { editionNumber: number; tier: string; claimedAt: Date }[]
+  >;
   /** Commission terms, keyed by project id. Absent means none are sold. */
   readonly commissionTerms?: ReadonlyMap<number, FakeCommissionTerms>;
   /** Commissions already accepted this month, keyed by project id. */
@@ -234,6 +255,12 @@ export function fakePrisma(db: FakeDatabase): PrismaClient {
     $transaction: (run: (tx: unknown) => Promise<unknown>) => run(stub),
     $queryRaw: () => Promise.resolve([{ id: 1 }]),
     member: {
+      findFirst: (args: { where: { handle?: string } }) =>
+        Promise.resolve(
+          args.where.handle === 'tester' || args.where.handle === 'holder'
+            ? { id: args.where.handle === 'holder' ? 777 : 555 }
+            : null,
+        ),
       upsert: (args: { where: { platform_externalId: { externalId: string } } }) =>
         Promise.resolve({ id: Number(args.where.platform_externalId.externalId) }),
       findUnique: (args: { where: { id: number } }) =>
@@ -273,6 +300,17 @@ export function fakePrisma(db: FakeDatabase): PrismaClient {
       },
     },
     project: {
+      findFirst: (args: { where: { announceChannelId?: string } }) => {
+        const bound = db.groupBinding;
+        if (bound === undefined || bound.groupId !== args.where.announceChannelId) {
+          return Promise.resolve(null);
+        }
+        return Promise.resolve({
+          id: bound.projectId,
+          name: bound.name,
+          eligibilityRule: db.eligibilityRule ?? {},
+        });
+      },
       findUnique: (args: { where: { slug?: string; id?: number } }) => {
         const found =
           args.where.slug !== undefined
@@ -288,6 +326,9 @@ export function fakePrisma(db: FakeDatabase): PrismaClient {
           ...found,
           canvasWidth: canvas.width,
           canvasHeight: canvas.height,
+          // The entry lookup carries the eligibility rule through, and a fake
+          // that omitted it made every gated project look open.
+          eligibilityRule: db.eligibilityRule ?? {},
         });
       },
     },
@@ -313,10 +354,11 @@ export function fakePrisma(db: FakeDatabase): PrismaClient {
       findMany: (args: {
         where: { projectId?: number; memberId?: number; claimType?: string };
       }) => {
-        // Two different callers land here: the claimed-hash scan for a
-        // project, and the per-member lookups behind /mine and /collection.
+        // Three callers land here now: the claimed-hash scan for a project,
+        // the per-member lookups behind /mine and /collection, and /verify
+        // asking what one member holds.
         if (args.where.memberId !== undefined) {
-          return Promise.resolve([]);
+          return Promise.resolve(db.claimsByMember?.get(args.where.memberId) ?? []);
         }
         const projectId = args.where.projectId ?? 0;
         return Promise.resolve(
@@ -354,6 +396,7 @@ export interface Harness {
   readonly rawCalls: { method: string; payload: Record<string, unknown> }[];
   countOf(method: string): number;
   send(text: string, userId?: number): Promise<void>;
+  sendInGroup(text: string, groupId: number, userId?: number): Promise<void>;
   press(data: string, messageId: number, userId?: number): Promise<void>;
 }
 
@@ -518,6 +561,22 @@ export function createHarness(options: HarnessOptions = {}): Harness {
     rawCalls,
     countOf(method: string): number {
       return calls.filter((call) => call.method === method).length;
+    },
+    /** Sends into a group chat, which is the only place /verify runs. */
+    async sendInGroup(text: string, groupId: number, userId = 555): Promise<void> {
+      updateId += 1;
+      const command = /^\/[a-z_]+/.exec(text);
+      await bot.handleUpdate({
+        update_id: updateId,
+        message: {
+          message_id: updateId,
+          date: Math.floor(Date.now() / 1000),
+          chat: { id: groupId, type: 'supergroup', title: 'Community' },
+          from: { id: userId, is_bot: false, first_name: 'Tester', username: 'tester' },
+          text,
+          entities: command ? [{ type: 'bot_command', offset: 0, length: command[0].length }] : [],
+        },
+      });
     },
     async send(text: string, userId = 555): Promise<void> {
       updateId += 1;

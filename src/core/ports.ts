@@ -319,3 +319,24 @@ export type {
 /** Delivering a finished commission as a custom claim. */
 export { deliverCommission } from './commission/delivery.js';
 export type { DeliveryOutcome, DeliveryRequest } from './commission/delivery.js';
+
+// ---------------------------------------------------------------------------
+// Who may roll, and who holds what
+// ---------------------------------------------------------------------------
+
+/** Non-token eligibility. Token holdings gate commissions, not rolling. */
+export { decideEligibility, parseEligibilityRule, ruleGroupId } from './eligibility/rule.js';
+export type { EligibilityDecision, EligibilityRule, MembershipFact } from './eligibility/rule.js';
+export type { EligibilityRefusal as GroupEligibilityRefusal } from './eligibility/rule.js';
+
+export {
+  findKnownSince,
+  findProjectByGroup,
+  forgetGroupMembership,
+  recordGroupMembership,
+} from './db/group-repository.js';
+export type { GroupProject } from './db/group-repository.js';
+
+/** Public holder lookup. Never reads a wallet address, by construction. */
+export { verifyHolder } from './verification.js';
+export type { VerificationOutcome, VerifiedClaim } from './verification.js';

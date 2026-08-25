@@ -198,3 +198,39 @@ describe('the table itself', () => {
     expect(new Set(names).size).toBe(names.length);
   });
 });
+
+describe('every published command actually dispatches', () => {
+  /**
+   * The gap that let /collection die for a whole phase.
+   *
+   * It was registered after a `bot.on('message:text')` handler that returned
+   * without calling next(), which ends the middleware chain — so the command
+   * was never reached. Nothing caught it, because the collection tests
+   * exercised the paging functions directly and never sent the command.
+   *
+   * This drives every command in the menu through the bot and asserts each one
+   * produces something. It does not care what: only that a command published
+   * into everybody's client is not silently inert.
+   */
+  it('answers something for each one', async () => {
+    for (const spec of COMMANDS) {
+      const h = createHarness({
+        db: {
+          projectsBySlug: new Map([['drop', project({ id: 1, name: 'Drop' })]]),
+          claimsByProjectAndMember: new Map(),
+          groupBinding: { groupId: '-100999', projectId: 1, name: 'Drop' },
+        },
+        adminIds: ['555'],
+      });
+
+      // /verify only runs in a group; everything else in a private chat.
+      if (spec.name === 'verify') {
+        await h.sendInGroup(`/${spec.name} @tester`, -100999, 555);
+      } else {
+        await h.send(`/${spec.name}`, 555);
+      }
+
+      expect(h.sent.length, `/${spec.name} is in the menu but answered nothing`).toBeGreaterThan(0);
+    }
+  });
+});

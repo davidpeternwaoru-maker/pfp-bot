@@ -54,6 +54,11 @@ export const COMMANDS = [
     audience: 'member',
   },
   {
+    name: 'verify',
+    description: 'Check publicly what a member holds in this group’s collection',
+    audience: 'member',
+  },
+  {
     name: 'queue',
     description: 'Work the commission queue',
     audience: 'admin',

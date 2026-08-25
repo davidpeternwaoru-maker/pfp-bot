@@ -21,6 +21,7 @@ export async function findProjectBySlug(
       status: true,
       claimOpensAt: true,
       claimClosesAt: true,
+      eligibilityRule: true,
     },
   });
 }
@@ -59,6 +60,7 @@ export async function findProjectById(
       status: true,
       claimOpensAt: true,
       claimClosesAt: true,
+      eligibilityRule: true,
     },
   });
 }
