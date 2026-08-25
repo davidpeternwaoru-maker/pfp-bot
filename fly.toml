@@ -42,7 +42,11 @@ primary_region = "iad"
     interval = "30s"
     method = "GET"
     timeout = "5s"
-    path = "/health"
+    # Readiness rather than liveness. Fly uses this to decide whether to send
+    # traffic here, and an instance that cannot reach its database should not
+    # receive any — while still not being restarted, since restarting has
+    # never been the fix for a database that is asleep.
+    path = "/ready"
 
 [[vm]]
   # The smallest size sharp and Node fit in comfortably. 256mb runs out of

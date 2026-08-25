@@ -247,6 +247,23 @@ describe.skipIf(DATABASE_URL === undefined)('the signing page', () => {
     expect(await response.json()).toEqual({ ok: true });
   }, 60_000);
 
+  it('answers readiness by actually asking the database', async () => {
+    // The other question: "should traffic come here", not "should this be
+    // restarted". A process whose database is unreachable is up but cannot
+    // serve, so this and /health must be able to disagree.
+    const response = await fetch(`${origin}/ready`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ready: true });
+  }, 60_000);
+
+  it('says not ready with a status code, not a cheerful body', async () => {
+    // A load balancer reads the status code. A 200 carrying { ready: false }
+    // is a check nobody performs.
+    const response = await fetch(`${origin}/ready`, { method: 'POST' });
+    expect(response.status).toBe(405);
+  }, 60_000);
+
   it('serves nothing else at all', async () => {
     for (const path of ['/', '/index.html', '/../src/index.ts', '/link']) {
       const response = await fetch(`${origin}${path}`);

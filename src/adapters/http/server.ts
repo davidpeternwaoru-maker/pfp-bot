@@ -103,6 +103,9 @@ function readField(body: unknown, key: string): string | null {
   return typeof value === 'string' && value.length > 0 && value.length <= 200 ? value : null;
 }
 
+/** Tight: a probe is answered on every deploy and every few seconds after. */
+const READINESS_TIMEOUT_MS = 3_000;
+
 export function createHttpServer(deps: HttpDependencies): Server {
   const domain = new URL(deps.publicBaseUrl).host;
 
@@ -137,6 +140,25 @@ export function createHttpServer(deps: HttpDependencies): Server {
       return;
     }
 
+    // Readiness, which is a different question from liveness.
+    //
+    // "Should traffic come here" rather than "should this be restarted". A
+    // process whose database is unreachable is up but cannot serve, so this
+    // fails while /health passes — and that difference is the whole point of
+    // having both. Restarting would not reach a sleeping database; routing
+    // around this instance until it recovers would.
+    if (path === '/ready') {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        sendJson(response, 405, { ready: false });
+        return;
+      }
+      const ready = await databaseReachable();
+      // 503 rather than 200-with-a-flag: a load balancer reads the status
+      // code, and a body nobody parses is a check nobody performs.
+      sendJson(response, ready ? 200 : 503, { ready });
+      return;
+    }
+
     const verify = VERIFY_PATH.exec(path);
     if (verify !== null) {
       if (request.method !== 'POST') {
@@ -159,6 +181,30 @@ export function createHttpServer(deps: HttpDependencies): Server {
 
     // No directory listing, no hints, no 404 body worth reading.
     sendHtml(response, 404, expiredPage());
+  }
+
+  /**
+   * One cheap query, with a deadline.
+   *
+   * Bounded because an unbounded readiness check on a hung database is a
+   * readiness check that hangs — and a probe that never answers is worse than
+   * one that answers no, since a platform reads the silence as neither.
+   */
+  async function databaseReachable(): Promise<boolean> {
+    const deadline = new Promise<false>((resolve) => {
+      setTimeout(() => {
+        resolve(false);
+      }, READINESS_TIMEOUT_MS).unref();
+    });
+
+    try {
+      return await Promise.race([deps.prisma.$queryRaw`SELECT 1`.then(() => true), deadline]);
+    } catch (error) {
+      deps.logger.warn('http.not_ready', {
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
   }
 
   async function handleLinkPage(response: ServerResponse, token: string): Promise<void> {
