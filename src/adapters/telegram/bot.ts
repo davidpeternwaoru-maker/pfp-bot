@@ -42,6 +42,11 @@ import {
   skip,
   startDraft,
   transitionCommission,
+  attachReference,
+  addRevision,
+  deliverCommission,
+  MAX_REVISION,
+  saveReference,
 } from '../../core/ports.js';
 import type {
   Availability,
@@ -73,10 +78,12 @@ import {
   showClaimed,
 } from './claim-flow.js';
 import { showBrowse, showCombination } from './presenter.js';
+import { downloadUpload, uploadRejectionReply } from './uploads.js';
 import {
   commissionStepKeyboard,
   declineReasonKeyboard,
   queueKeyboard,
+  revisionKeyboard,
   waitlistKeyboard,
   walletLinkKeyboard,
 } from './keyboard.js';
@@ -96,6 +103,12 @@ import {
   statusNotification,
   stepPrompt,
   waitlistJoined,
+  REFERENCE_SAVED,
+  DELIVERY_WANTS_ARTWORK,
+  deliveryDone,
+  deliveryRefused,
+  REVISION_LIMIT_REACHED,
+  REVISION_RECORDED,
 } from './commission-replies.js';
 import { createInMemoryMessageBindings } from './message-binding.js';
 import type { MessageBindingStore } from './message-binding.js';
@@ -161,6 +174,8 @@ export interface BotDependencies {
   readonly adminIds?: readonly { readonly platform: string; readonly externalId: string }[];
   /** Needed only to check token holdings; absent means no gate can be checked. */
   readonly solanaRpcUrl?: string | undefined;
+  /** Where member uploads and finished commission artwork are written. */
+  readonly commissionRoot?: string;
   readonly logger: Logger;
   /**
    * Supplying the bot's own identity skips the getMe call grammY would
@@ -231,6 +246,27 @@ export function createBot(deps: BotDependencies): Bot {
    */
   const activeDraftProject = new Map<number, number>();
   const queuePosition = new Map<number, number>();
+
+  /**
+   * Operators who have said they are about to send finished artwork.
+   *
+   * A photo is otherwise ambiguous — a member sends one as a reference, an
+   * operator sends one as a delivery — and guessing which from who sent it
+   * would deliver somebody's reference photo as their commission.
+   */
+  const awaitingDelivery = new Map<number, number>();
+
+  /**
+   * Drafts that are a revision rather than a new order.
+   *
+   * The questionnaire is identical either way — the plan asks for a revision
+   * to be submitted through the same structured form — so what differs is only
+   * what happens on confirm, and that is remembered here rather than by
+   * teaching the form about it.
+   */
+  const revisionFor = new Map<number, number>();
+
+  const commissionRoot = deps.commissionRoot ?? deps.claimRoot;
 
   const isOperator = (telegramUserId: number): boolean =>
     adminIds.some(
@@ -624,7 +660,19 @@ export function createBot(deps: BotDependencies): Bot {
     // An order already in flight is what they came to ask about.
     const open = await findOpenCommission(prisma, project.id, member.id);
     if (open !== null) {
-      await ctx.reply(commissionStatusReply(open));
+      // A change can be asked for only while there is still something to
+      // change, and only if the one allowed revision is unused.
+      const revisable =
+        (open.status === 'approved' || open.status === 'in_production') &&
+        open.briefs.length <= MAX_REVISION;
+
+      await ctx.reply(
+        commissionStatusReply(open),
+        revisable ? { reply_markup: revisionKeyboard() } : {},
+      );
+      if (revisable) {
+        activeDraftProject.set(member.id, project.id);
+      }
       return;
     }
 
@@ -737,6 +785,116 @@ export function createBot(deps: BotDependencies): Bot {
     await showStep(ctx, result.draft, terms.eligibleSlots);
   });
 
+  /**
+   * A photo, which is either a member's reference or an operator's delivery.
+   *
+   * Which one is decided by what the sender was last asked for, never by the
+   * photo itself. Nothing about an uploaded file is trusted: the bytes are
+   * checked against their own header, the size against what actually arrives,
+   * and the stored name is generated rather than taken from anything sent.
+   */
+  bot.on(['message:photo', 'message:document'], async (ctx) => {
+    const from = ctx.from;
+    if (from === undefined) {
+      return;
+    }
+
+    const photo = ctx.message.photo?.[ctx.message.photo.length - 1];
+    const document = ctx.message.document;
+    const fileId = photo?.file_id ?? document?.file_id;
+    if (fileId === undefined) {
+      return;
+    }
+
+    const member = await resolveMember(prisma, telegramIdentity(from));
+    const log = logger.child({ memberId: member.id });
+
+    const deliveringFor = awaitingDelivery.get(from.id);
+    const active = deliveringFor === undefined ? await activeDraft(member.id) : null;
+
+    // Nobody asked this sender for a file. Ignored rather than guessed at.
+    if (deliveringFor === undefined && active === null) {
+      return;
+    }
+
+    const downloaded = await downloadUpload(ctx, deps.token, fileId);
+    if (!downloaded.ok) {
+      await ctx.reply(uploadRejectionReply(downloaded.rejection));
+      return;
+    }
+
+    if (deliveringFor !== undefined) {
+      if (!isOperator(from.id)) {
+        awaitingDelivery.delete(from.id);
+        await ctx.reply(QUEUE_NOT_ADMIN);
+        return;
+      }
+
+      const commission = await findCommission(prisma, deliveringFor);
+      const project =
+        commission === null ? null : await findProjectById(prisma, commission.projectId);
+      if (commission === null || project === null) {
+        awaitingDelivery.delete(from.id);
+        await ctx.reply(queueMovedOn(null));
+        return;
+      }
+
+      const stored = await saveReference(
+        commissionRoot,
+        commission.projectId,
+        commission.memberId,
+        downloaded.bytes,
+        downloaded.format,
+      );
+
+      const pack = await loadPack(roll, commission.projectId);
+      const outcome = await deliverCommission({
+        prisma,
+        commissionId: commission.id,
+        projectId: commission.projectId,
+        memberId: commission.memberId,
+        canvas: pack.canvas,
+        sourcePath: stored,
+        sourceRoot: commissionRoot,
+        claimRoot: deps.claimRoot,
+      });
+
+      awaitingDelivery.delete(from.id);
+
+      if (outcome.kind !== 'delivered') {
+        await ctx.reply(deliveryRefused(outcome.kind));
+        return;
+      }
+
+      log.info('commission.delivered', {
+        commissionId: commission.id,
+        editionNumber: outcome.editionNumber,
+      });
+      await ctx.reply(deliveryDone(outcome.editionNumber));
+
+      const after = await findCommission(prisma, commission.id);
+      if (after !== null) {
+        await notifyMember(after);
+      }
+      return;
+    }
+
+    if (active !== null) {
+      const stored = await saveReference(
+        commissionRoot,
+        active.draft.projectId,
+        member.id,
+        downloaded.bytes,
+        downloaded.format,
+      );
+      // Attaching is not answering: they stay on the question they were on.
+      const withReference = attachReference(active.draft, stored);
+      await drafts.set(withReference);
+      await ctx.reply(REFERENCE_SAVED);
+      await showStep(ctx, withReference, active.terms.eligibleSlots);
+    }
+  });
+
   /** Every claim the member holds, across every collection. */
   bot.command('collection', async (ctx) => {
     const from = ctx.from;
@@ -814,6 +972,19 @@ export function createBot(deps: BotDependencies): Bot {
       }
 
       switch (commissionAction.kind) {
+        case 'queue-deliver': {
+          const commissionId = queuePosition.get(from.id);
+          if (commissionId === undefined) {
+            await ctx.reply(QUEUE_EMPTY);
+            return;
+          }
+          // Recorded so the next photo from this operator is read as a
+          // delivery rather than as somebody's reference image.
+          awaitingDelivery.set(from.id, commissionId);
+          await ctx.reply(DELIVERY_WANTS_ARTWORK);
+          return;
+        }
+
         case 'queue-paid':
           await actOnQueue(ctx, from.id, 'awaiting_approval');
           return;
@@ -880,6 +1051,31 @@ export function createBot(deps: BotDependencies): Bot {
         return;
       }
 
+      if (commissionAction.kind === 'commission-revise') {
+        const projectId = activeDraftProject.get(member.id);
+        if (projectId === undefined) {
+          await ctx.reply(COMMISSION_NEEDS_PROJECT);
+          return;
+        }
+        const open = await findOpenCommission(prisma, projectId, member.id);
+        const terms = await findCommissionTerms(prisma, projectId);
+        if (open === null || terms === null) {
+          await ctx.reply(COMMISSION_NEEDS_PROJECT);
+          return;
+        }
+        if (open.briefs.length > MAX_REVISION) {
+          await ctx.reply(REVISION_LIMIT_REACHED);
+          return;
+        }
+
+        // The same form as the original, as the plan asks.
+        revisionFor.set(member.id, open.id);
+        const fresh = startDraft(member.id, projectId);
+        await drafts.set(fresh);
+        await showStep(ctx, fresh, terms.eligibleSlots);
+        return;
+      }
+
       if (active === null) {
         // Their answers expired or were cleared. Nothing is lost that was
         // ever ordered, so this is a restart rather than an error.
@@ -893,6 +1089,7 @@ export function createBot(deps: BotDependencies): Bot {
         case 'commission-abandon':
           await drafts.clear(member.id, draft.projectId);
           activeDraftProject.delete(member.id);
+          revisionFor.delete(member.id);
           await ctx.reply(ORDER_ABANDONED);
           return;
 
@@ -938,6 +1135,24 @@ export function createBot(deps: BotDependencies): Bot {
           const finished = finish(draft, terms.eligibleSlots);
           if (!finished.ok) {
             await ctx.reply(finished.problems.map((problem) => problem.message).join('\n'));
+            return;
+          }
+
+          // A revision replaces the brief on an order that already exists,
+          // rather than creating a second one.
+          const revising = revisionFor.get(member.id);
+          if (revising !== undefined) {
+            const recorded = await addRevision(prisma, revising, finished.brief);
+            await drafts.clear(member.id, draft.projectId);
+            activeDraftProject.delete(member.id);
+            revisionFor.delete(member.id);
+
+            await ctx.reply(
+              recorded.kind === 'recorded' ? REVISION_RECORDED : REVISION_LIMIT_REACHED,
+            );
+            if (recorded.kind === 'recorded') {
+              log.info('commission.revised', { commissionId: revising });
+            }
             return;
           }
 

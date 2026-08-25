@@ -17,10 +17,12 @@ import {
   COMMISSION_ORDER,
   COMMISSION_SKIP,
   COMMISSION_WAITLIST,
+  COMMISSION_REVISE,
   commissionColourAction,
   commissionSlotAction,
   QUEUE_APPROVE,
   QUEUE_PAID,
+  QUEUE_DELIVER,
   QUEUE_BACK,
   QUEUE_DECLINE,
   QUEUE_NEXT,
@@ -213,7 +215,7 @@ export function queueKeyboard(status: CommissionStatus, hasMore: boolean): Inlin
     keyboard.text('Start drawing', QUEUE_PRODUCE).text('Decline', QUEUE_DECLINE).row();
   }
   if (status === 'in_production') {
-    keyboard.text('Decline', QUEUE_DECLINE).row();
+    keyboard.text('Deliver', QUEUE_DELIVER).text('Decline', QUEUE_DECLINE).row();
   }
 
   if (hasMore) {
@@ -232,4 +234,15 @@ export function declineReasonKeyboard(): InlineKeyboard {
 
   keyboard.text('← Back', QUEUE_BACK);
   return keyboard;
+}
+
+/**
+ * Offered on a commission still being made, once and only once.
+ *
+ * The cap is load-bearing rather than stingy: unlimited revisions is how a
+ * self-serve system quietly turns into the operator mediating a design
+ * argument, which is the exact outcome this phase exists to prevent.
+ */
+export function revisionKeyboard(): InlineKeyboard {
+  return new InlineKeyboard().text('Request a change', COMMISSION_REVISE);
 }

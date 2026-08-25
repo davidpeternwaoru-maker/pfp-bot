@@ -10,6 +10,7 @@ import {
   importTraitsCommand,
 } from './commands/manage.js';
 import { issueOneOfOneCommand } from './commands/one-of-one.js';
+import { commissionSettingsCommand, payablesCommand } from './commands/commissions.js';
 import { CliError } from './errors.js';
 
 /**
@@ -33,6 +34,9 @@ const USAGE = `pfp-bot admin
   issue-custom     --issuer <platform:id> --project <slug> --to <member> --file <path> [--yes]
   export-holders   --project <slug> [--out <file.csv>]
   stats            --project <slug>
+  commissions      --project <slug> [--enable|--disable] [--price <usdc>] [--capacity <n>]
+                   [--share <percent>] [--slots a,b] [--mint <addr> --minimum <amount>]
+  payables         [--project <slug>]
 
 Trait pack layout: one directory per slot named "<layerOrder>-<slot>",
 containing "name.png", "name.tier.png" or "name.tier.weight.png". Every slot
@@ -44,6 +48,10 @@ award is for a reserved combination of traits. issue-bespoke and issue-custom
 are for a finished one-of-one image, given as --file relative to the trait
 root. A commission (issue-custom) is non-transferable and never appears in
 rarity statistics; a bespoke piece counts like any other claim.
+
+Approving and declining commissions happens in Telegram, with /queue — that
+is a judgement made wherever you are. Settings and accounting live here, where
+there is a record of what was typed.
 
 Commands that change what members can do ask for confirmation. Pass --yes
 only when scripting, and only when you already know what it will do.
@@ -116,6 +124,12 @@ async function main(): Promise<number> {
           },
           'custom',
         );
+
+      case 'commissions':
+        return await commissionSettingsCommand(prisma, args, write);
+
+      case 'payables':
+        return await payablesCommand(prisma, args, write);
 
       case 'export-holders':
         return await exportHoldersCommand(prisma, args, write);

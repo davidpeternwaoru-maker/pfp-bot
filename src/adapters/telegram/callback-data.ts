@@ -36,6 +36,7 @@ export const COMMISSION_SKIP = 'mk';
 export const COMMISSION_ORDER = 'mo';
 export const COMMISSION_ABANDON = 'mx';
 export const COMMISSION_WAITLIST = 'mw';
+export const COMMISSION_REVISE = 'mv';
 const COMMISSION_SLOT_PREFIX = 'ms';
 const COMMISSION_COLOUR_PREFIX = 'mc';
 
@@ -46,6 +47,7 @@ const COMMISSION_COLOUR_PREFIX = 'mc';
  * operator's own session, so a payload cannot address somebody else's order —
  * and authorisation still comes from the sender, never from the button.
  */
+export const QUEUE_DELIVER = 'nv';
 export const QUEUE_PAID = 'np';
 export const QUEUE_APPROVE = 'na';
 export const QUEUE_DECLINE = 'nd';
@@ -89,6 +91,8 @@ export type CallbackAction =
   | { readonly kind: 'commission-order' }
   | { readonly kind: 'commission-abandon' }
   | { readonly kind: 'commission-waitlist' }
+  | { readonly kind: 'commission-revise' }
+  | { readonly kind: 'queue-deliver' }
   | { readonly kind: 'queue-paid' }
   | { readonly kind: 'queue-approve' }
   | { readonly kind: 'queue-decline' }
@@ -207,7 +211,13 @@ export function parseCallbackData(
   if (raw === COMMISSION_WAITLIST) {
     return { kind: 'commission-waitlist' };
   }
+  if (raw === COMMISSION_REVISE) {
+    return { kind: 'commission-revise' };
+  }
 
+  if (raw === QUEUE_DELIVER) {
+    return { kind: 'queue-deliver' };
+  }
   if (raw === QUEUE_PAID) {
     return { kind: 'queue-paid' };
   }

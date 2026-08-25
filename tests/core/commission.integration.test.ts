@@ -16,6 +16,10 @@ import {
 } from '../../src/core/db/commission-repository.js';
 import type { ValidBrief } from '../../src/core/commission/brief.js';
 import type { PrismaClient } from '../../src/generated/prisma/client.js';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { deliverCommission } from '../../src/core/commission/delivery.js';
+import { makeTempRoot, solidPng } from '../helpers/fixtures.js';
 import { assertDatabaseResponsive } from '../helpers/database.js';
 
 /**
@@ -36,6 +40,8 @@ let prisma: PrismaClient;
 let projectId: number;
 let memberIds: number[];
 let nextExternalId = BigInt(Date.now()) * 1000n;
+let artworkRoot: string;
+let claimRoot: string;
 
 const PRICE_CENTS = 5_000;
 const TREASURY_BPS = 1_250;
@@ -114,6 +120,8 @@ beforeAll(async () => {
     select: { id: true },
   });
   projectId = project.id;
+  artworkRoot = await makeTempRoot();
+  claimRoot = await makeTempRoot();
 }, 120_000);
 
 afterAll(async () => {
@@ -131,6 +139,11 @@ afterAll(async () => {
     await prisma.member.deleteMany({ where: { id: { in: memberIds } } });
   }
   await prisma.$disconnect();
+  for (const dir of [artworkRoot, claimRoot]) {
+    if (dir !== undefined) {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
 }, 60_000);
 
 describe.skipIf(DATABASE_URL === undefined)('commissions', () => {
@@ -471,5 +484,143 @@ describe.skipIf(DATABASE_URL === undefined)('what the operator sees and is owed'
     // enthusiasm.
     const waiting = await prisma.commissionWaitlist.count({ where: { projectId, memberId } });
     expect(waiting).toBe(1);
+  }, 60_000);
+});
+
+describe.skipIf(DATABASE_URL === undefined)('delivering a commission', () => {
+  /** Finished artwork, as an operator would hand it over. */
+  async function artwork(name: string, shade: number): Promise<string> {
+    const path = `${name}.png`;
+    await mkdir(artworkRoot, { recursive: true });
+    await writeFile(
+      join(artworkRoot, path),
+      await solidPng(32, 32, { r: shade, g: 20, b: 60, a: 255 }),
+    );
+    return path;
+  }
+
+  /** Walks an order to the point where artwork can be handed over. */
+  async function readyToDeliver(memberId: number): Promise<number> {
+    const placed = await order(memberId);
+    if (placed.kind !== 'ordered') {
+      throw new Error('fixture could not place an order');
+    }
+    const commissionId = placed.commissionId;
+    await transitionCommission({
+      prisma,
+      commissionId,
+      from: 'awaiting_payment',
+      to: 'awaiting_approval',
+    });
+    await transitionCommission({ prisma, commissionId, from: 'awaiting_approval', to: 'approved' });
+    await transitionCommission({ prisma, commissionId, from: 'approved', to: 'in_production' });
+    return commissionId;
+  }
+
+  it('issues a custom claim and marks the commission delivered against it', async () => {
+    const memberId = await freshMember();
+    const commissionId = await readyToDeliver(memberId);
+
+    const outcome = await deliverCommission({
+      prisma,
+      commissionId,
+      projectId,
+      memberId,
+      canvas: { width: 32, height: 32 },
+      sourcePath: await artwork('finished-a', 10),
+      sourceRoot: artworkRoot,
+      claimRoot,
+    });
+
+    expect(outcome.kind).toBe('delivered');
+
+    const view = await findCommission(prisma, commissionId);
+    expect(view?.status).toBe('delivered');
+
+    // The claim obeys Phase 9's custom rules without this path deciding any
+    // of them: non-transferable, no trait combination, invisible to rarity.
+    const claim = await prisma.claim.findFirst({
+      where: { projectId, memberId, claimType: 'custom' },
+      select: { transferable: true, traitIds: true, claimType: true, id: true },
+    });
+    expect(claim?.transferable).toBe(false);
+    expect(claim?.traitIds).toEqual([]);
+
+    // Linked by claim id, not edition number: editions repeat across projects
+    // and that column is globally unique.
+    const linked = await prisma.commission.findUnique({
+      where: { id: commissionId },
+      select: { deliveredClaimId: true },
+    });
+    expect(linked?.deliveredClaimId).toBe(claim?.id);
+  }, 120_000);
+
+  it('refuses to deliver anything that is not in production', async () => {
+    const memberId = await freshMember();
+    const placed = await order(memberId);
+    if (placed.kind !== 'ordered') {
+      throw new Error('fixture could not place an order');
+    }
+
+    const outcome = await deliverCommission({
+      prisma,
+      commissionId: placed.commissionId,
+      projectId,
+      memberId,
+      canvas: { width: 32, height: 32 },
+      sourcePath: await artwork('finished-b', 20),
+      sourceRoot: artworkRoot,
+      claimRoot,
+    });
+
+    expect(outcome.kind).toBe('wrong-status');
+    expect((await findCommission(prisma, placed.commissionId))?.status).toBe('awaiting_payment');
+  }, 120_000);
+
+  it('refuses the same artwork twice, whoever it is for', async () => {
+    const first = await freshMember();
+    const second = await freshMember();
+    const shared = await artwork('finished-shared', 30);
+
+    const a = await readyToDeliver(first);
+    expect(
+      (
+        await deliverCommission({
+          prisma,
+          commissionId: a,
+          projectId,
+          memberId: first,
+          canvas: { width: 32, height: 32 },
+          sourcePath: shared,
+          sourceRoot: artworkRoot,
+          claimRoot,
+        })
+      ).kind,
+    ).toBe('delivered');
+
+    // Two members holding one image is the duplicate this product cannot
+    // ship, whatever produced the image.
+    const b = await readyToDeliver(second);
+    const outcome = await deliverCommission({
+      prisma,
+      commissionId: b,
+      projectId,
+      memberId: second,
+      canvas: { width: 32, height: 32 },
+      sourcePath: shared,
+      sourceRoot: artworkRoot,
+      claimRoot,
+    });
+
+    expect(outcome.kind).toBe('artwork-taken');
+    // And the commission stays in production, so it can still be delivered
+    // with artwork that is genuinely its own.
+    expect((await findCommission(prisma, b))?.status).toBe('in_production');
+  }, 120_000);
+
+  it('leaves the delivered commission owing the treasury its share', async () => {
+    const report = await payablesReport(prisma, projectId);
+    expect(report.treasuryOwedCents).toBeGreaterThan(0);
+    expect(report.lines.some((line) => line.kind === 'treasury-share')).toBe(true);
   }, 60_000);
 });

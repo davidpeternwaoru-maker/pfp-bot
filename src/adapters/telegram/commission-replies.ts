@@ -355,3 +355,37 @@ export function queueMovedOn(actual: CommissionStatus | null): string {
     ? 'That commission is no longer there.'
     : `Somebody got there first — it is already ${STATUS_WORDS[actual]}.`;
 }
+
+export const REFERENCE_SAVED =
+  'Reference image saved. It goes to the artist with your brief — nothing is drawn from it automatically.';
+
+export const DELIVERY_WANTS_ARTWORK = [
+  'Send the finished artwork as a photo or file.',
+  '',
+  'It becomes the member’s claim the moment it arrives: permanent,',
+  'non-transferable, and absent from every rarity figure.',
+].join('\n');
+
+export function deliveryDone(editionNumber: number): string {
+  return `Delivered as edition #${String(editionNumber)}. The member has been told and it is in their collection.`;
+}
+
+/** Says which refusal it was, so an operator has something real to act on. */
+export function deliveryRefused(kind: string): string {
+  switch (kind) {
+    case 'artwork-taken':
+      return 'That exact image is already somebody’s claim. A one-of-one is identified by its bytes, so the same file cannot be delivered twice.';
+    case 'member-already-holds':
+      return 'That member already holds a commissioned claim in this collection.';
+    case 'wrong-status':
+      return 'That commission is not in production, so there is nothing to deliver. The artwork was not issued.';
+    default:
+      return 'That could not be delivered. Nothing was issued.';
+  }
+}
+
+export const REVISION_RECORDED =
+  'Your change has been sent to the artist. This was your one revision — anything further would be a new order.';
+
+export const REVISION_LIMIT_REACHED =
+  'You have already used your one revision. Anything further would be a new order at full price.';

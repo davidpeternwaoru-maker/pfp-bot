@@ -302,3 +302,20 @@ export type {
 
 export { createInMemoryDraftStore } from './commission/draft-store.js';
 export type { CommissionDraftStore, DraftStoreOptions } from './commission/draft-store.js';
+
+/** Taking a file from a member: nothing about one is trusted. */
+export {
+  checkReference,
+  MAX_REFERENCE_BYTES,
+  readCapped,
+  saveReference,
+} from './commission/reference.js';
+export type {
+  ReferenceCheck,
+  ReferenceFormat,
+  ReferenceRejection,
+} from './commission/reference.js';
+
+/** Delivering a finished commission as a custom claim. */
+export { deliverCommission } from './commission/delivery.js';
+export type { DeliveryOutcome, DeliveryRequest } from './commission/delivery.js';

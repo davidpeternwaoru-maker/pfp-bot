@@ -40,6 +40,8 @@ export interface OneOfOneRequest {
 export type OneOfOneOutcome =
   | {
       readonly kind: 'issued';
+      /** The claim's own id. Distinct from the edition, which repeats across projects. */
+      readonly claimId: number;
       readonly editionNumber: number;
       readonly imagePath: string;
       readonly contentHash: string;
@@ -97,6 +99,7 @@ export async function issueOneOfOne(request: OneOfOneRequest): Promise<OneOfOneO
 
     return {
       kind: 'issued',
+      claimId: inserted.id,
       editionNumber: inserted.editionNumber,
       imagePath: relativePath,
       contentHash: digest,
