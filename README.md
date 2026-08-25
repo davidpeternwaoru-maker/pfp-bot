@@ -94,6 +94,9 @@ written since the dump.
 
 ## Deploying
 
+See [DEPLOYMENT.md](DEPLOYMENT.md) for provisioning a database, running
+migrations, and every environment variable. Once that is done:
+
 ```bash
 npm run deploy
 ```

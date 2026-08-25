@@ -4,6 +4,12 @@
 .env.*
 !.env.example
 
+# Database dumps. Every member row, every claim, every wallet address this
+# project has ever recorded. The build context is uploaded whole to a remote
+# builder, so leaving these in would send the entire database over the wire and
+# into a cache nobody here controls — whether or not any COPY line names them.
+backups
+
 node_modules
 dist
 coverage

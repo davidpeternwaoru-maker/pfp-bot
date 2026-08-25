@@ -1,105 +1,120 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { createShutdown } from '../../src/shutdown.js';
 import { createLogger } from '../../src/logging/logger.js';
 
-/** The JSON shape createLogger emits, as far as these tests care. */
-interface LogLine {
-  readonly event: string;
-  readonly reason?: string;
+/**
+ * Shutting down without dropping work.
+ *
+ * A deploy sends SIGTERM to a process that may be half-way through a claim.
+ * The claim is the one operation where being interrupted is not recoverable
+ * by trying again: the row either committed or it did not, and a member who
+ * confirmed and was never told which is left holding a screenshot of artwork
+ * that may or may not be theirs.
+ *
+ * So the order matters, and so does finishing. These tests pin both.
+ */
+
+const logger = createLogger({ level: 'error', write: () => undefined });
+
+/** A step that takes time, and records when it started and finished. */
+function slowStep(name: string, order: string[], ms: number): () => Promise<void> {
+  return async () => {
+    order.push(`${name}:start`);
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    order.push(`${name}:done`);
+  };
 }
 
-function capturingLogger(): { logger: ReturnType<typeof createLogger>; lines: string[] } {
-  const lines: string[] = [];
-  const logger = createLogger({ level: 'debug', write: (line: string) => lines.push(line) });
-  return { logger, lines };
-}
-
-function eventsFrom(lines: readonly string[]): string[] {
-  return lines.map((line) => (JSON.parse(line) as LogLine).event);
-}
-
-describe('createShutdown', () => {
-  it('stops the bot before disconnecting the database', async () => {
+describe('graceful shutdown', () => {
+  it('finishes stopping the bot before touching the database', async () => {
     const order: string[] = [];
-    const { logger } = capturingLogger();
 
+    await createShutdown({
+      stopBot: slowStep('bot', order, 20),
+      disconnectDatabase: slowStep('db', order, 1),
+      logger,
+    })('SIGTERM');
+
+    // Not merely started in order — finished in order. Disconnecting while an
+    // update was still running is how an in-flight claim loses its database
+    // half-way through committing.
+    expect(order).toEqual(['bot:start', 'bot:done', 'db:start', 'db:done']);
+  });
+
+  it('closes the signing page before the database too', async () => {
+    const order: string[] = [];
+
+    await createShutdown({
+      stopBot: slowStep('bot', order, 5),
+      stopHttp: slowStep('http', order, 5),
+      disconnectDatabase: slowStep('db', order, 1),
+      logger,
+    })('SIGTERM');
+
+    expect(order).toEqual([
+      'bot:start',
+      'bot:done',
+      'http:start',
+      'http:done',
+      'db:start',
+      'db:done',
+    ]);
+  });
+
+  it('waits for a long in-flight update rather than returning early', async () => {
+    const order: string[] = [];
+    const started = Date.now();
+
+    // Stands in for a claim queued behind the project row lock.
+    await createShutdown({
+      stopBot: slowStep('claim', order, 120),
+      disconnectDatabase: slowStep('db', order, 1),
+      logger,
+    })('SIGTERM');
+
+    expect(Date.now() - started).toBeGreaterThanOrEqual(100);
+    expect(order[1]).toBe('claim:done');
+  });
+
+  it('still closes the database when the bot refuses to stop', async () => {
+    const order: string[] = [];
+
+    await createShutdown({
+      stopBot: () => Promise.reject(new Error('polling wedged')),
+      disconnectDatabase: slowStep('db', order, 1),
+      logger,
+    })('SIGTERM');
+
+    // A bot that fails to stop must not leave a connection open behind it.
+    expect(order).toEqual(['db:start', 'db:done']);
+  });
+
+  it('runs once however many signals arrive', async () => {
+    const order: string[] = [];
     const shutdown = createShutdown({
-      stopBot: async () => {
-        await Promise.resolve();
-        order.push('bot');
-      },
-      disconnectDatabase: async () => {
-        await Promise.resolve();
-        order.push('db');
-      },
+      stopBot: slowStep('bot', order, 30),
+      disconnectDatabase: slowStep('db', order, 1),
       logger,
     });
 
-    await shutdown('SIGTERM');
+    // A deploy that sends SIGTERM twice, or an operator pressing Ctrl-C again
+    // because the first one seemed slow. A second teardown running in parallel
+    // would disconnect the database under the first one's feet.
+    await Promise.all([shutdown('SIGTERM'), shutdown('SIGTERM'), shutdown('SIGINT')]);
 
-    // An in-flight update must finish before the connection it is using goes.
-    expect(order).toEqual(['bot', 'db']);
+    expect(order).toEqual(['bot:start', 'bot:done', 'db:start', 'db:done']);
   });
 
-  it('runs once even when the signal arrives twice', async () => {
-    const stopBot = vi.fn(() => Promise.resolve());
-    const disconnectDatabase = vi.fn(() => Promise.resolve());
-    const { logger } = capturingLogger();
-
-    const shutdown = createShutdown({ stopBot, disconnectDatabase, logger });
-
-    await Promise.all([shutdown('SIGINT'), shutdown('SIGINT'), shutdown('SIGTERM')]);
-
-    expect(stopBot).toHaveBeenCalledTimes(1);
-    expect(disconnectDatabase).toHaveBeenCalledTimes(1);
-  });
-
-  it('still closes the database when stopping the bot fails', async () => {
-    const disconnectDatabase = vi.fn(() => Promise.resolve());
-    const { logger, lines } = capturingLogger();
-
-    const shutdown = createShutdown({
-      stopBot: () => Promise.reject(new Error('telegram unreachable')),
-      disconnectDatabase,
-      logger,
-    });
-
-    await shutdown('SIGTERM');
-
-    // Otherwise a failed stop leaks the connection on every restart.
-    expect(disconnectDatabase).toHaveBeenCalledTimes(1);
-    expect(eventsFrom(lines)).toContain('shutdown.bot_stop_failed');
-    expect(eventsFrom(lines)).toContain('shutdown.complete');
-  });
-
-  it('completes even when disconnecting fails', async () => {
-    const { logger, lines } = capturingLogger();
-
-    const shutdown = createShutdown({
-      stopBot: () => Promise.resolve(),
-      disconnectDatabase: () => Promise.reject(new Error('already closed')),
-      logger,
-    });
-
-    await expect(shutdown('SIGTERM')).resolves.toBeUndefined();
-    expect(eventsFrom(lines)).toContain('shutdown.disconnect_failed');
-  });
-
-  it('never puts the failure reason anywhere but the log', async () => {
-    const { logger, lines } = capturingLogger();
-
-    const shutdown = createShutdown({
-      stopBot: () => Promise.reject(new Error('boom')),
-      disconnectDatabase: () => Promise.resolve(),
-      logger,
-    });
-
-    await shutdown('SIGINT');
-
-    const failure = lines
-      .map((line) => JSON.parse(line) as LogLine)
-      .find((line) => line.event === 'shutdown.bot_stop_failed');
-
-    expect(failure?.['reason']).toBe('boom');
+  it('completes even when every step fails', async () => {
+    // Reporting a clean exit is what lets the platform stop waiting. A
+    // shutdown that threw would look like a hang and be SIGKILLed.
+    await expect(
+      createShutdown({
+        stopBot: () => Promise.reject(new Error('no')),
+        stopHttp: () => Promise.reject(new Error('no')),
+        disconnectDatabase: () => Promise.reject(new Error('no')),
+        logger,
+      })('SIGTERM'),
+    ).resolves.toBeUndefined();
   });
 });

@@ -10,6 +10,23 @@ primary_region = "iad"
 [build]
   dockerfile = "Dockerfile"
 
+# How long Fly waits after SIGTERM before sending SIGKILL, which cannot be
+# caught and takes the process down wherever it happens to be.
+#
+# Fly's default is 5 seconds, and that is not enough here. A claim holds the
+# project row lock for its whole transaction, and concurrent claimants queue
+# behind it — insertClaim allows a transaction 20 seconds before giving up, so
+# a claim that is legitimately mid-flight during a deploy can still be working
+# well past the fifth second. At the default, a deploy timed against a busy
+# moment would SIGKILL a member's claim after they had confirmed it: the row
+# either committed or did not, nobody was told which, and the artwork on their
+# screen may or may not be theirs.
+#
+# 30 seconds is comfortably past that ceiling, so an in-flight claim always
+# reaches its own conclusion — commit or clean failure — before Fly stops
+# being patient.
+kill_timeout = "30s"
+
 [env]
   NODE_ENV = "production"
   HTTP_PORT = "3000"
